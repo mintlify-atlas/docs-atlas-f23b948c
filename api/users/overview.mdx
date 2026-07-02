@@ -1,7 +1,7 @@
 ---
-title: "User API Endpoints Reference"
+title: "CalenderyBack User API — Complete Endpoint Reference"
 sidebarTitle: "Overview"
-description: "The CalenderyBack Users API manages registration, authentication, profile retrieval, and public-key operations across 18 REST endpoints."
+description: "The CalenderyBack Users API covers registration, authentication, profile retrieval, settings, contacts, and public-key operations across 22 REST endpoints."
 ---
 
 The Users resource is the foundation of CalenderyBack. It covers the full user lifecycle: creating and verifying accounts, authenticating via HTTP Basic, fetching and updating profiles, managing account settings, searching contacts, and handling end-to-end encryption public keys. All app-level endpoints require an active `ROLE_USER` session, while several also enforce ownership via `@PreAuthorize`.
@@ -36,13 +36,13 @@ The Users resource is the foundation of CalenderyBack. It covers the full user l
 ## Explore by Topic
 
 <CardGroup cols={2}>
-  <Card title="Registration" icon="user-plus" href="/api/users/registration">
+  <Card title="Registration" icon="user-plus" href="api/users/registration">
     Register new users, confirm email tokens, log in, validate account status, and resend verification emails.
   </Card>
-  <Card title="Profile" icon="circle-user" href="/api/users/profile">
+  <Card title="Profile" icon="circle-user" href="api/users/profile">
     Retrieve full user profiles with follow status, upload profile photos via Supabase signed URLs, and manage E2E encryption public keys.
   </Card>
-  <Card title="Settings" icon="gear" href="/api/users/settings">
+  <Card title="Settings" icon="gear" href="api/users/settings">
     Fetch and update account settings, list all users, delete accounts, and search or page through chat contacts.
   </Card>
 </CardGroup>

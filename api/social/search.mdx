@@ -1,5 +1,5 @@
 ---
-title: "Search Users and Discover Contacts"
+title: "Search Users and Discover Contacts — CalenderyBack API"
 sidebarTitle: "Search"
 description: "Search the CalenderyBack user directory by name and retrieve chat contacts with last-message previews using two paginated ROLE_USER-protected endpoints."
 ---
@@ -136,14 +136,14 @@ The authenticated user's identity is resolved from the JWT (`Authentication` obj
 }
 ```
 
-| Field | Type | Source | Description |
-|---|---|---|---|
-| `idUsuario` | `Long` | `UserChatDataDto` | Unique user identifier of the contact |
-| `nombre` | `String` | `UserChatDataDto` | Username / display name of the contact |
-| `fotoPerfil` | `String` | `UserChatDataDto` | Signed URL for the contact's profile photo |
-| `idChat` | `Long` | `LastMessageDataModel` | ID of the shared chat conversation |
-| `ultimoMensaje` | `String` | `LastMessageDataModel` (`contenido`) | Text content of the most recent message in the chat |
-| `mensajeNuevo` | `Boolean` | `LastMessageDataModel` (`noRead`) | `true` if the last message has not been read by the authenticated user |
+| Field | Type | Description |
+|---|---|---|
+| `idUsuario` | `Long` | Unique user identifier of the contact |
+| `nombre` | `String` | Username / display name of the contact |
+| `fotoPerfil` | `String` | Signed URL for the contact's profile photo |
+| `idChat` | `Long` | ID of the shared chat conversation |
+| `ultimoMensaje` | `String` | Text content of the most recent message in the chat (mapped from `LastMessageDataModel.contenido`) |
+| `mensajeNuevo` | `Boolean` | `true` if the last message has not been read by the authenticated user (mapped from `LastMessageDataModel.noRead`) |
 
 #### Example
 

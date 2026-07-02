@@ -20,7 +20,7 @@ The codebase is split into three clearly separated layers:
 
 ## Bounded Contexts / Modules
 
-The entire application is divided into twelve **bounded contexts**, each living in its own top-level package under `com.rubenmartin.calenderyback`:
+The entire application is divided into ten **bounded contexts**, each living in its own top-level package under `com.rubenmartin.calenderyback`:
 
 | Context | Purpose |
 |---|---|
@@ -34,7 +34,8 @@ The entire application is divided into twelve **bounded contexts**, each living 
 | `vertificationToken` | Email-verification tokens tied to user registration |
 | `rol` | Role definitions (`ROLE_USER`, etc.) |
 | `publicationDate` | Dates associated with calendar publications |
-| `common` | Cross-cutting concerns: mediator, security, exception handling |
+
+The `common` package holds cross-cutting infrastructure (mediator, security, exception handling) but is not itself a bounded context — it has no domain entities of its own.
 
 Every context is self-contained — it owns its domain entities, application handlers, and infrastructure adapters. Cross-context communication goes through the domain model, not through shared database tables or direct service calls.
 
@@ -113,10 +114,8 @@ public interface Request<T> {
 // common/mediator/RequestHandler.java
 public interface RequestHandler<T extends Request<R>, R> {
 
-    /** Execute the request and return the response. */
     R handle(T request);
 
-    /** Returns the concrete Request class this handler is responsible for. */
     Class<T> getRequestType();
 }
 ```
@@ -163,25 +162,29 @@ public class RegisterUserHandler
 
     @Override
     public RegisterUserResponse handle(RegisterUserRequest request) {
-        if (userRepositoryPort.findUserByEmail(request.getEmail()).isPresent())
+        if (userExist(request))
             throw new UserAlreadyExistException(request.getEmail());
 
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
-        String hashed = encoder.encode(request.getKeypass());
+        String result = encoder.encode(request.getKeypass());
 
         User newUser = User.builder()
                 .nombre(request.getNombre())
                 .email(request.getEmail())
-                .keypass(hashed)
+                .keypass(result)
                 .enable(false)          // disabled until email is confirmed
                 .build();
 
-        Rol userRole = rolRepositoryPort.findByName(USER_ROL)
+        Rol user_rol = rolRepositoryPort.findByName(USER_ROL)
                 .orElseThrow(() -> new RolNotFoundException(USER_ROL));
-        newUser.setRoles(List.of(userRole));
+        newUser.setRoles(List.of(user_rol));
 
-        User saved = userRepositoryPort.upsertUser(newUser);
-        return new RegisterUserResponse(saved);
+        User registeredUser = userRepositoryPort.upsertUser(newUser);
+        return new RegisterUserResponse(registeredUser);
+    }
+
+    private boolean userExist(RegisterUserRequest request) {
+        return userRepositoryPort.findUserByEmail(request.getEmail()).isPresent();
     }
 
     @Override
@@ -266,6 +269,8 @@ The `UserRepositoryPort` interface lives in the domain and declares every persis
 public interface UserRepositoryPort {
     User upsertUser(User user);
     void deleteUser(Long id);
+    void deleteAllUsers();
+    List<User> findAllUsers();
     Optional<User> findUserById(Long id);
     Optional<User> findUserByEmail(String email);
     boolean accountIsEnabled(Long idUsuario);

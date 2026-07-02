@@ -1,7 +1,7 @@
 ---
-title: "Followers and Following REST Endpoints"
+title: "Followers and Following API Endpoints — CalenderyBack"
 sidebarTitle: "Followers"
-description: "Follow or unfollow users, list a user's followers and following with name-based filtering, and check follow relationships using the CalenderyBack followers API."
+description: "Follow or unfollow users and list a user's followers or following with name-based filtering using the CalenderyBack followers API."
 ---
 
 ## Overview
@@ -22,7 +22,7 @@ The relationship is **unidirectional**: user A following user B does not imply t
 
 <Note>
   All write endpoints (`follow` and `unfollow`) are guarded by a Spring Security
-  `@PreAuthorize("# userId == authentication.principal.idUsuario")` expression.
+  `@PreAuthorize("#userId == authentication.principal.idUsuario")` expression.
   This means the `idUsuario` query parameter **must match the ID of the currently
   authenticated user** — you cannot follow or unfollow someone on behalf of
   another user. Attempting to do so will result in a `403 Forbidden` response

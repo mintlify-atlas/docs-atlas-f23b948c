@@ -99,6 +99,7 @@ public class MessageController implements MessageApi {
     @Autowired
     private SimpMessagingTemplate simpMessagingTemplate;
 
+    @Override
     @MessageMapping("/chat.sendPrivate")
     public void sendSpecific(@Payload MessageDto messageDto, Principal user) {
         LocalDateTime date = LocalDateTime.now();
@@ -136,6 +137,7 @@ Spring Security and the in-memory broker ensure that only the authenticated user
 A second handler supports a broadcast / history channel:
 
 ```java
+@Override
 @MessageMapping("/secured/chat")
 @SendTo("/secured/history")
 public MessageDto sendMessage(MessageDto messageDto) {

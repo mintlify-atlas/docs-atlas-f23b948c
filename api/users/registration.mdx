@@ -179,6 +179,32 @@ curl "https://api.example.com/api/users/auth/validateUser?email=alice@example.co
 
 ---
 
+## Confirm account is active
+
+<api-endpoint method="GET" path="/api/users/activeAccountConfirmation" />
+
+Checks that the specified user's account is currently enabled and throws an error if it is not. Requires `ROLE_USER` and ownership (`#idUsuario == authentication.principal.idUsuario`). Typically called after login to gate access to protected app features.
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user to check. Must match the authenticated principal.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Account is active. Empty body. |
+| `403 Forbidden` | `idUsuario` does not match the authenticated user. |
+
+```bash
+curl "https://api.example.com/api/users/activeAccountConfirmation?idUsuario=42" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+---
+
 ## Resend registration verification token
 
 <api-endpoint method="GET" path="/api/users/auth/resendRegistrationToken" />

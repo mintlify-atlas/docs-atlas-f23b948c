@@ -1,7 +1,7 @@
 ---
 title: "Fetch Publication Feeds — Home and Profile Timelines"
 sidebarTitle: "Feed"
-description: "Retrieve a paginated home feed of publications from followed users, or filter a user's calendar posts by month and year using the CalenderyBack publications feed endpoints."
+description: "Retrieve a paginated home or profile feed of publications filtered by month and year. Requires ROLE_USER and supports standard Pageable parameters."
 ---
 
 ## GET /api/publication/app/getHomePublications
@@ -94,7 +94,7 @@ curl -X GET \
 
 ## GET /api/publication/app/getPostUrl
 
-Creates a placeholder `Publication` record in the database and returns a short-lived Supabase Storage signed upload URL. This is **step 1** of the two-step post creation flow — see the [Overview](/api/publications/overview) for the full walkthrough.
+Creates a placeholder `Publication` record in the database and returns a short-lived Supabase Storage signed upload URL. This is **step 1** of the three-step post creation flow — see the [Overview](/api/publications/overview) for the full walkthrough.
 
 **Auth:** `ROLE_USER` (JWT Bearer token required)
 
@@ -124,7 +124,7 @@ curl -X GET \
 
 ## PUT /api/publication/app/putPublicationData
 
-Finalises a placeholder publication by attaching its text message, owner, and calendar date. This is **step 3** of the two-step post creation flow and must be called after the media file has been uploaded directly to Supabase Storage.
+Finalises a placeholder publication by attaching its text message, owner, and calendar date. This is **step 3** of the three-step post creation flow and must be called after the media file has been uploaded directly to Supabase Storage.
 
 **Auth:** `ROLE_USER` (JWT Bearer token required)
 

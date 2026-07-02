@@ -24,7 +24,7 @@ All configuration lives in `com.rubenmartin.calenderyback.common.security`.
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-@EnableSpringDataWebSupport(pageSerializationMode = PageSerializationMode.VIA_DTO)
+@EnableSpringDataWebSupport(pageSerializationMode = EnableSpringDataWebSupport.PageSerializationMode.VIA_DTO)
 @ComponentScan("com.rubenmartin.calenderyback.common.security")
 public class SecurityConfig {
 
@@ -87,7 +87,7 @@ The following table summarises every URL pattern and its access policy:
 | `/api/chat/**` | Requires `ROLE_USER` |
 | `/chat/**` | Requires `ROLE_USER` |
 | `/ws-endpoint/**` | Requires `ROLE_USER` |
-| `/`, `/*.html`, `/static/**`, `/*.js`, `/*.css`, `/favicon.ico` | Public — static assets |
+| `/`, `/chatTest.html`, `/index.html`, `/static/**`, `/*.js`, `/*.css`, `/favicon.ico` | Public — static assets |
 | `OPTIONS /**` | Public — allows browser CORS preflight requests |
 | Everything else | Requires any authenticated user |
 
@@ -118,6 +118,8 @@ To add new roles, insert a row into the `rol` table (e.g. `ROLE_ADMIN`) and assi
 
 ```java
 @Service
+@Data
+@Transient
 @RequiredArgsConstructor
 public class MyUserDetailsService implements UserDetailsService {
 

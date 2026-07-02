@@ -1,7 +1,7 @@
 ---
-title: "Deploy CalenderyBack with Docker"
+title: "Deploy CalenderyBack with Docker: Multi-Stage Build Guide"
 sidebarTitle: "Docker"
-description: "Build and run CalenderyBack using the included multi-stage Dockerfile. The image uses Maven for the build stage and eclipse-temurin:21-jre for the runtime stage."
+description: "Build and run CalenderyBack using the multi-stage Dockerfile. Maven compiles the JAR; eclipse-temurin:21-jre-jammy provides the lean runtime image."
 ---
 
 CalenderyBack ships with a production-ready multi-stage `Dockerfile` that produces a lean, secure runtime image. The build stage compiles the application with Maven while the runtime stage keeps the final image small by including only the JRE.

@@ -1,7 +1,7 @@
 ---
-title: "Publications API — Calendar Posts Reference"
+title: "Publications API — Calendar Posts and Media Upload"
 sidebarTitle: "Overview"
-description: "The Publications API lets users create calendar-linked posts, upload media to Supabase Storage, and retrieve home feeds and profile timelines. All endpoints require ROLE_USER."
+description: "Create calendar-linked posts, upload media via Supabase signed URLs, and fetch home or profile feeds. All endpoints require ROLE_USER authentication."
 ---
 
 ## What is a Publication?
@@ -27,9 +27,9 @@ Publications expose social counters (`likesAmount`, `commentaryAmount`) and a pe
 
 ---
 
-## Two-Step Post Creation Flow
+## Three-Step Post Creation Flow
 
-Creating a publication is a two-step process. The media file is uploaded **directly from the client to Supabase Storage** using a short-lived signed URL; the Java server only coordinates the handshake and stores the metadata.
+Creating a publication is a three-step process. The media file is uploaded **directly from the client to Supabase Storage** using a short-lived signed URL; the Java server only coordinates the handshake and stores the metadata.
 
 <Note>
   Signed URLs keep media traffic off the Java application server entirely. The client receives a pre-authorised Supabase URL and uploads the file straight to object storage, which improves throughput and avoids unnecessary load on the API tier.
