@@ -1,0 +1,202 @@
+---
+title: "User Registration and Account Activation Endpoints"
+sidebarTitle: "Registration"
+description: "Register new users, confirm email verification tokens, validate account status, and resend verification emails using the CalenderyBack auth endpoints."
+---
+
+These endpoints handle the complete onboarding flow: a caller submits registration details, receives a verification email, confirms via the emailed token, and can later validate or re-trigger the verification process.
+
+---
+
+## Register a new user
+
+<api-endpoint method="POST" path="/api/users/auth/register" />
+
+Creates a new user record and publishes an `OnRegistrationCompleteEvent` that dispatches a verification email to the provided address. The account is created with `enable = false` until the email token is confirmed.
+
+### Request body
+
+<ParamField body="idUsuario" type="number">
+  Optional. Numeric user ID — omit on creation; the server assigns the ID.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  Display name. Must not be blank.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Valid email address. Validated with `@ValidEmail`. Must not be blank.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Short bio or description. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="keypass" type="string" required>
+  Password / passphrase for the account. Must not be blank.
+</ParamField>
+
+<ParamField body="fotoPerfil" type="string">
+  URL of the user's profile photo. Can be updated later via the signed-URL upload flow.
+</ParamField>
+
+<ParamField body="clavePublica" type="string">
+  The user's E2E encryption public key. Can be set or updated later via `PUT /api/users/app/publicKey`.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="idUsuario" type="number">
+  Newly assigned numeric user ID.
+</ResponseField>
+
+<ResponseField name="roles" type="string[]">
+  List of role names assigned to the user (e.g. `["ROLE_USER"]`).
+</ResponseField>
+
+```bash
+curl -X POST https://api.example.com/api/users/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Alice",
+    "email": "alice@example.com",
+    "keypass": "s3cr3tP@ss",
+    "descripcion": "Hello, I am Alice!"
+  }'
+```
+
+```json Response
+{
+  "idUsuario": 42,
+  "roles": ["ROLE_USER"]
+}
+```
+
+---
+
+## Confirm email registration token
+
+<api-endpoint method="GET" path="/api/users/registrationConfirm" />
+
+Activates the user account by validating the one-time token included in the verification email. On success, `user.enable` is set to `true`.
+
+### Query parameters
+
+<ParamField query="token" type="string" required>
+  The verification token from the registration email.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Account activated. Empty body. |
+| `401 Unauthorized` | Token has expired (`ExpiredVerificationTokenException`). |
+| `404 Not Found` | Token does not exist (`TokenNotFoundException`). |
+
+```bash
+curl "https://api.example.com/api/users/registrationConfirm?token=abc123-def456"
+```
+
+---
+
+## Log in
+
+<api-endpoint method="POST" path="/api/users/auth/login" />
+
+Authenticates the caller using HTTP Basic credentials (email + password). On success, returns the user's ID and assigned roles.
+
+The `Authorization` header must contain `Basic <base64(email:password)>`.
+
+### Response `200 OK`
+
+<ResponseField name="idUsuario" type="number">
+  The authenticated user's numeric ID.
+</ResponseField>
+
+<ResponseField name="roles" type="string[]">
+  List of role names (e.g. `["ROLE_USER"]`).
+</ResponseField>
+
+```bash
+curl -X POST https://api.example.com/api/users/auth/login \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "idUsuario": 42,
+  "roles": ["ROLE_USER"]
+}
+```
+
+---
+
+## Validate user account status
+
+<api-endpoint method="GET" path="/api/users/auth/validateUser" />
+
+Returns a combined object containing the user's identity and a boolean indicating whether their account is currently enabled. Useful before prompting a user to re-send a verification email.
+
+### Query parameters
+
+<ParamField query="email" type="string" required>
+  The email address of the user to validate.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="userInfo" type="object">
+  Embedded `UserInfoResponseDto`.
+
+  <Expandable title="UserInfoResponseDto fields">
+    <ResponseField name="idUsuario" type="number">
+      The user's numeric ID.
+    </ResponseField>
+    <ResponseField name="roles" type="string[]">
+      List of assigned role names.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="enable" type="boolean">
+  `true` if the account has been activated via the email verification flow; `false` otherwise.
+</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/auth/validateUser?email=alice@example.com"
+```
+
+```json Response
+{
+  "userInfo": {
+    "idUsuario": 42,
+    "roles": ["ROLE_USER"]
+  },
+  "enable": false
+}
+```
+
+---
+
+## Resend registration verification token
+
+<api-endpoint method="GET" path="/api/users/auth/resendRegistrationToken" />
+
+Triggers a new verification email for the given user ID. Useful when the original token has expired or was never received.
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  The numeric ID of the user who needs a new token.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | New verification email dispatched. Empty body. |
+
+```bash
+curl "https://api.example.com/api/users/auth/resendRegistrationToken?idUsuario=42"
+```

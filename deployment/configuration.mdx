@@ -1,0 +1,274 @@
+---
+title: "Configure CalenderyBack Environment Variables"
+sidebarTitle: "Configuration"
+description: "All CalenderyBack runtime settings are controlled by environment variables. This reference covers database, mail, and Supabase storage configuration."
+---
+
+CalenderyBack externalises every secret and environment-specific value through
+environment variables that are resolved by Spring's `${…}` placeholder
+mechanism at startup. The canonical source of truth is
+`src/main/resources/application.yaml`; nothing in that file is
+environment-specific except the fixed SMTP host details and logging levels.
+
+---
+
+## Environment variable reference
+
+| Variable | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `DATA_BASE_URL` | ✅ Yes | JDBC connection URL for the PostgreSQL database | `jdbc:postgresql://localhost:5432/calendery` |
+| `DATA_BASE_USERNAME` | ✅ Yes | PostgreSQL user that owns the `calendery` schema | `postgres` |
+| `DATA_BASE_PASSWORD` | ✅ Yes | Password for `DATA_BASE_USERNAME` | `s3cr3t` |
+| `SUPABASE_URL` | ✅ Yes | Base URL of your Supabase project | `https://abcdefgh.supabase.co` |
+| `SERVICE_KEY` | ✅ Yes | Supabase service role key — grants full storage access | `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…` |
+
+<Note>
+  Mail (SMTP) credentials are currently hard-coded in `application.yaml` with a
+  Gmail app password. See the [Mail (SMTP)](#mail-smtp) section below for how to
+  override them safely in production.
+</Note>
+
+---
+
+## Database
+
+CalenderyBack connects to **PostgreSQL only**. The JDBC driver class is
+`org.postgresql.Driver` and the Hibernate dialect is
+`org.hibernate.dialect.PostgreSQLDialect` — no other database is supported
+without code changes.
+
+```yaml
+spring:
+  datasource:
+    url: ${DATA_BASE_URL}
+    username: ${DATA_BASE_USERNAME}
+    password: ${DATA_BASE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+```
+
+### Connection URL format
+
+```
+jdbc:postgresql://<host>:<port>/<database>
+```
+
+| Segment | Example | Notes |
+|---------|---------|-------|
+| `host` | `localhost`, `db.internal` | Hostname or IP of the PostgreSQL server |
+| `port` | `5432` | Default PostgreSQL port |
+| `database` | `calendery` | Database name — must exist before starting the app |
+
+### Schema management (`ddl-auto: update`)
+
+`hibernate.ddl-auto` is set to **`update`**, which means Hibernate compares the
+entity model against the live schema on every startup and applies any missing
+tables or columns automatically.
+
+<Note>
+  `ddl-auto: update` is convenient during development because it keeps the
+  schema in sync with your entity classes without any manual migration steps.
+  For production workloads, consider switching to `validate` and managing schema
+  changes with a dedicated migration tool such as
+  [Flyway](https://flywaydb.org/) or [Liquibase](https://liquibase.org/).
+  Automated DDL changes can cause downtime or data loss if an entity is renamed
+  or a column is dropped.
+</Note>
+
+---
+
+## Supabase Storage
+
+Profile photos and publication media are stored in Supabase Storage. The
+`GetSignedUrl` component reads two environment variables at startup via Spring's
+`@Value` annotation:
+
+```java
+@Value("${SUPABASE_URL}")
+private String supabaseUrl;
+
+@Value("${SERVICE_KEY}")
+private String serviceKey;
+```
+
+These values are used to authenticate every call to the Supabase Storage API.
+
+### How signed URLs are generated
+
+CalenderyBack builds Supabase Storage API URLs at runtime and calls them with
+the service role key as a Bearer token:
+
+| Operation | HTTP call | Returns |
+|-----------|-----------|---------|
+| **Upload URL** | `POST {SUPABASE_URL}/storage/v1/object/upload/sign/{bucket}/{path}` | A pre-signed URL the client uses to upload a file directly to Supabase |
+| **Download URL** | `POST {SUPABASE_URL}/storage/v1/object/sign/{bucket}/{path}` | A signed URL valid for 3 600 seconds (1 hour) |
+| **Batch download URLs** | `POST {SUPABASE_URL}/storage/v1/object/sign/{bucket}` | A map of `path → signedURL` for multiple files at once |
+| **Public URL** | Constructed locally | `{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}` — no API call required |
+
+### Variable details
+
+**`SUPABASE_URL`**
+: The base URL of your Supabase project, found in your project's **Settings → API** page.
+  Do **not** include a trailing slash.
+  Example: `https://abcdefghijklmnop.supabase.co`
+
+**`SERVICE_KEY`**
+: The **service role** key (not the anon/public key). This key bypasses Row
+  Level Security and gives full read/write access to all storage buckets. Treat
+  it as a root credential and never expose it to client-side code.
+
+---
+
+## Mail (SMTP)
+
+CalenderyBack sends email verification tokens via Gmail's SMTP relay. The
+connection parameters are fixed in `application.yaml`:
+
+```yaml
+spring:
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: martinandraderuben@gmail.com
+    password: qeok apwb rqqw iius
+    properties:
+      mail:
+        debug: true
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+            connectiontimeout: 5000
+            timeout: 5000
+            writetimeout: 5000
+```
+
+<Warning>
+  The default `application.yaml` contains a real Gmail app password in
+  plain text. This credential **must** be replaced before deploying to any
+  shared or production environment.
+
+  Override the `username` and `password` fields with environment variables in
+  production. You can do this by adding the following to `application.yaml`
+  and supplying `MAIL_USERNAME` / `MAIL_PASSWORD` at runtime:
+
+  ```yaml
+  spring:
+    mail:
+      username: ${MAIL_USERNAME}
+      password: ${MAIL_PASSWORD}
+  ```
+
+  Alternatively, remove the hard-coded values from `application.yaml`, rotate
+  the exposed app password immediately in your Google account, and generate a
+  new one exclusively for the production deployment.
+</Warning>
+
+### SMTP connection settings
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Host | `smtp.gmail.com` | Google's outbound SMTP relay |
+| Port | `587` | STARTTLS submission port |
+| `starttls.enable` | `true` | Upgrades the plain connection to TLS after the initial handshake |
+| `starttls.required` | `true` | Refuses to send mail if the TLS upgrade fails |
+| Timeouts | `5000 ms` | Applied to connection, read, and write operations |
+
+To use a different email provider, update `host`, `port`, and the `starttls`
+settings to match that provider's requirements.
+
+---
+
+## Application name and logging
+
+### Application name
+
+```yaml
+spring:
+  application:
+    name: calenderyBack
+```
+
+This name appears in log output and is used by Spring Boot Actuator when
+reporting application metadata.
+
+### Logging levels
+
+```yaml
+logging:
+  level:
+    root: WARN
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+```
+
+The default configuration is intentionally quiet — only `WARN` and `ERROR`
+messages are emitted. This keeps production logs focused on actionable issues
+without verbose `INFO` or `DEBUG` noise from the Spring framework.
+
+To enable more detailed output during development, set the desired level when
+starting the application:
+
+```bash
+# Example: enable DEBUG for the full application package
+docker run \
+  ... \
+  -e LOGGING_LEVEL_COM_RUBENMARTIN_CALENDERYBACK=DEBUG \
+  calenderyback
+```
+
+Spring Boot maps `LOGGING_LEVEL_<PACKAGE>` environment variables directly to
+`logging.level.<package>` properties at startup.
+
+---
+
+## Full `application.yaml` reference
+
+```yaml
+spring:
+  application:
+    name: calenderyBack
+
+  datasource:
+    url: ${DATA_BASE_URL}
+    username: ${DATA_BASE_USERNAME}
+    password: ${DATA_BASE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME}          # override in production
+    password: ${MAIL_PASSWORD}          # override in production
+    properties:
+      mail:
+        debug: true
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+            connectiontimeout: 5000
+            timeout: 5000
+            writetimeout: 5000
+
+logging:
+  level:
+    root: WARN
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+```

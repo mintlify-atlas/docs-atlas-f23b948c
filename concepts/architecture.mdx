@@ -1,0 +1,338 @@
+---
+title: "Hexagonal Architecture in CalenderyBack"
+sidebarTitle: "Architecture"
+description: "CalenderyBack is structured around hexagonal (ports and adapters) architecture — each domain exposes ports, application-layer handlers, and swappable infrastructure adapters."
+---
+
+## Overview
+
+CalenderyBack follows **hexagonal architecture** (also known as ports and adapters), a pattern that keeps business logic completely isolated from infrastructure concerns. The core idea is simple: your domain never imports your database driver, your HTTP framework, or any other delivery mechanism. Instead, it exposes abstract **ports** (interfaces), and the infrastructure layer provides **adapters** (implementations) that plug in at startup.
+
+The codebase is split into three clearly separated layers:
+
+| Layer | Package | Responsibility |
+|---|---|---|
+| **Domain** | `…​.{context}.domain` | Entities, value objects, and repository port interfaces |
+| **Application** | `…​.{context}.application` | Commands, queries, and their handlers |
+| **Infrastructure** | `…​.{context}.infrastructure` | JPA entities, REST controllers, mappers, and repository implementations |
+
+---
+
+## Bounded Contexts / Modules
+
+The entire application is divided into twelve **bounded contexts**, each living in its own top-level package under `com.rubenmartin.calenderyback`:
+
+| Context | Purpose |
+|---|---|
+| `user` | Account registration, profiles, settings, public-key management |
+| `publication` | Social posts / calendar events |
+| `comment` | Comments on publications |
+| `publicationLike` | Likes on publications |
+| `follower` | Follow / unfollow relationships between users |
+| `chat` | Conversation threads between two users |
+| `message` | Individual messages within a chat (REST + WebSocket) |
+| `vertificationToken` | Email-verification tokens tied to user registration |
+| `rol` | Role definitions (`ROLE_USER`, etc.) |
+| `publicationDate` | Dates associated with calendar publications |
+| `common` | Cross-cutting concerns: mediator, security, exception handling |
+
+Every context is self-contained — it owns its domain entities, application handlers, and infrastructure adapters. Cross-context communication goes through the domain model, not through shared database tables or direct service calls.
+
+---
+
+## Per-Context Directory Structure
+
+The following tree shows the canonical layout for the `user` context. Every other context mirrors this structure.
+
+```
+user/
+├── application/
+│   ├── command/
+│   │   ├── register/
+│   │   │   ├── RegisterUserRequest.java      ← implements Request<RegisterUserResponse>
+│   │   │   ├── RegisterUserResponse.java
+│   │   │   └── RegisterUserHandler.java      ← implements RequestHandler<…>
+│   │   ├── update/
+│   │   ├── delete/
+│   │   └── …
+│   ├── query/
+│   │   ├── getById/
+│   │   │   ├── GetUserByIdRequest.java
+│   │   │   ├── GetUserByIdResponse.java
+│   │   │   └── GetUserByIdHandler.java
+│   │   └── …
+│   └── security/
+│       └── MyUserDetailsService.java
+├── domain/
+│   ├── entity/
+│   │   └── User.java                         ← pure Java, no JPA annotations
+│   ├── port/
+│   │   └── UserRepositoryPort.java           ← interface (the "port")
+│   └── exception/
+│       └── UserAlreadyExistException.java
+└── infrastructure/
+    ├── apiRest/
+    │   ├── UserController.java               ← @RestController
+    │   ├── UserRestApi.java                  ← interface defining the contract
+    │   ├── dto/
+    │   │   └── UserDto.java
+    │   └── mapper/
+    │       └── UserMapper.java               ← MapStruct mapper
+    └── database/
+        ├── UserJPARepository.java            ← extends JpaRepository
+        ├── UserRepositoryImpl.java           ← implements UserRepositoryPort (the "adapter")
+        ├── entity/
+        │   └── UserEntity.java               ← @Entity with JPA annotations
+        └── mapper/
+            └── UserEntityMapper.java         ← MapStruct mapper
+```
+
+This layout makes the dependency direction explicit: `infrastructure` depends on `application` and `domain`; `application` depends on `domain`; `domain` depends on nothing but the JDK.
+
+---
+
+## The Mediator Pattern
+
+<Note>
+The Mediator pattern is the central routing mechanism in CalenderyBack. It decouples REST controllers (and WebSocket message handlers) from business logic entirely — a controller never calls a service directly. Instead, it builds a **Request** object and hands it to the `Mediator`, which looks up the correct `RequestHandler` and delegates. This makes it trivial to add new operations without touching existing code, and it means every business operation is expressed as a first-class, testable object.
+</Note>
+
+### Core Interfaces
+
+**`Request<T>`** — a marker interface. Every command and query object implements it, where `T` is the response type.
+
+```java
+// common/mediator/Request.java
+public interface Request<T> {
+}
+```
+
+**`RequestHandler<T, R>`** — handles one specific request type and returns a response.
+
+```java
+// common/mediator/RequestHandler.java
+public interface RequestHandler<T extends Request<R>, R> {
+
+    /** Execute the request and return the response. */
+    R handle(T request);
+
+    /** Returns the concrete Request class this handler is responsible for. */
+    Class<T> getRequestType();
+}
+```
+
+**`Mediator`** — a Spring `@Component` that auto-discovers all `RequestHandler` beans, builds a lookup map keyed by request class, and routes `dispatch()` calls at runtime.
+
+```java
+// common/mediator/Mediator.java
+@Component
+public class Mediator {
+
+    Map<? extends Class<?>, RequestHandler<?, ?>> requestHandlerMap;
+
+    public Mediator(List<RequestHandler<?, ?>> requestHandlers) {
+        requestHandlerMap = requestHandlers.stream()
+            .collect(Collectors.toMap(RequestHandler::getRequestType, Function.identity()));
+    }
+
+    public <R, T extends Request<R>> R dispatch(T request) {
+        RequestHandler<T, R> handler =
+            (RequestHandler<T, R>) requestHandlerMap.get(request.getClass());
+
+        if (handler == null)
+            throw new RuntimeException("No handler found for request type " + request.getClass());
+
+        return handler.handle(request);
+    }
+}
+```
+
+### Example: Registering a User
+
+`RegisterUserHandler` is a concrete `RequestHandler` that wires together the domain port and BCrypt encoding:
+
+```java
+@Component
+@RequiredArgsConstructor
+public class RegisterUserHandler
+        implements RequestHandler<RegisterUserRequest, RegisterUserResponse> {
+
+    private static final String USER_ROL = "ROLE_USER";
+    private final UserRepositoryPort userRepositoryPort;   // domain port — no JPA here
+    private final RolRepositoryPort rolRepositoryPort;
+
+    @Override
+    public RegisterUserResponse handle(RegisterUserRequest request) {
+        if (userRepositoryPort.findUserByEmail(request.getEmail()).isPresent())
+            throw new UserAlreadyExistException(request.getEmail());
+
+        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
+        String hashed = encoder.encode(request.getKeypass());
+
+        User newUser = User.builder()
+                .nombre(request.getNombre())
+                .email(request.getEmail())
+                .keypass(hashed)
+                .enable(false)          // disabled until email is confirmed
+                .build();
+
+        Rol userRole = rolRepositoryPort.findByName(USER_ROL)
+                .orElseThrow(() -> new RolNotFoundException(USER_ROL));
+        newUser.setRoles(List.of(userRole));
+
+        User saved = userRepositoryPort.upsertUser(newUser);
+        return new RegisterUserResponse(saved);
+    }
+
+    @Override
+    public Class<RegisterUserRequest> getRequestType() {
+        return RegisterUserRequest.class;
+    }
+}
+```
+
+The controller simply does:
+
+```java
+RegisterUserResponse response = mediator.dispatch(userMapper.mapToCreateUserRequest(userDto));
+```
+
+It has no idea that `RegisterUserHandler` exists — it only knows about `Mediator` and the request/response DTOs.
+
+---
+
+## Request Flow Diagram
+
+The following diagram traces a single HTTP request from the REST layer all the way to the database and back:
+
+```
+┌────────────────────┐
+│   HTTP Client      │
+└────────┬───────────┘
+         │  POST /api/users/auth/register
+         ▼
+┌────────────────────┐
+│  REST Controller   │  (infrastructure/apiRest)
+│  UserController    │  Builds a RegisterUserRequest, calls mediator.dispatch(request)
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│     Mediator       │  (common/mediator)
+│  dispatch(request) │  Looks up RegisterUserHandler in requestHandlerMap
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│  RegisterUser      │  (application/command/register)
+│  Handler           │  Pure business logic; uses only domain entities and port interfaces
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│   Domain Entity    │  (domain/entity)
+│   User.java        │  Plain Java object — no framework dependencies
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│ UserRepositoryPort │  (domain/port)
+│  (interface)       │  Defines upsertUser(), findUserByEmail(), etc.
+└────────┬───────────┘
+         │  implemented by
+         ▼
+┌────────────────────┐
+│ UserRepositoryImpl │  (infrastructure/database)
+│  @Repository       │  Converts User ↔ UserEntity via UserEntityMapper (MapStruct)
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│ UserJPARepository  │  (infrastructure/database)
+│ JpaRepository<…>   │  Spring Data JPA — SQL generated automatically
+└────────────────────┘
+```
+
+The arrows only point **inward**: infrastructure adapters depend on domain ports, never the other way around.
+
+---
+
+## Repository Port Pattern
+
+The `UserRepositoryPort` interface lives in the domain and declares every persistence operation the application needs:
+
+```java
+// user/domain/port/UserRepositoryPort.java
+public interface UserRepositoryPort {
+    User upsertUser(User user);
+    void deleteUser(Long id);
+    Optional<User> findUserById(Long id);
+    Optional<User> findUserByEmail(String email);
+    boolean accountIsEnabled(Long idUsuario);
+    Optional<Long> getUserIdByEmail(String email);
+    Page<User> findUserContacts(Long idUsuario, Pageable pageable);
+    Page<User> findUserContactsByName(Long idUsuario, String userName, Pageable pageable);
+    Page<User> findSearchUsers(Long idUsuario, Pageable pageable);
+    Page<User> findSearchUsersByName(Long idUsuario, String userName, Pageable pageable);
+    Optional<String> getUserPublicKey(Long idUsuario);
+}
+```
+
+`UserRepositoryImpl` in the infrastructure layer implements this interface. It delegates to `UserJPARepository` (a Spring Data `JpaRepository`) and uses `UserEntityMapper` to translate between the domain `User` POJO and the JPA-annotated `UserEntity`.
+
+---
+
+## MapStruct Mappers
+
+CalenderyBack uses **MapStruct** for all object-to-object conversions. There are two categories of mapper in every context:
+
+### Entity Mappers (domain ↔ JPA entity)
+
+```java
+// user/infrastructure/database/mapper/UserEntityMapper.java
+@Mapper(
+    componentModel = MappingConstants.ComponentModel.SPRING,
+    unmappedTargetPolicy = ReportingPolicy.ERROR,
+    uses = {FollowerEntityMapper.class}
+)
+public interface UserEntityMapper {
+    UserEntity mapToUserEntity(User user);   // domain → persistence
+    User mapToUser(UserEntity userEntity);   // persistence → domain
+}
+```
+
+### DTO Mappers (domain ↔ API DTO)
+
+REST controllers use a second set of mappers (e.g. `UserMapper`) to convert domain objects to the response DTOs that are serialized as JSON. This keeps the API contract decoupled from both the domain model and the database schema.
+
+MapStruct generates all implementation code at compile time — there is no runtime reflection involved.
+
+---
+
+## Spring Data JPA and Schema Management
+
+All JPA repositories extend `JpaRepository<EntityType, IdType>`. The `application.yaml` configures Hibernate with:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: update
+```
+
+`ddl-auto: update` instructs Hibernate to compare the current entity model against the existing schema on startup and apply any **additive** changes (new tables, new columns) automatically. This means you never need to write migration scripts for additive changes during development, though a dedicated migration tool (e.g. Flyway or Liquibase) is recommended before moving to production.
+
+The backing database is **PostgreSQL**, configured via environment variables:
+
+```yaml
+spring:
+  datasource:
+    url: ${DATA_BASE_URL}
+    username: ${DATA_BASE_USERNAME}
+    password: ${DATA_BASE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+```

@@ -1,0 +1,145 @@
+{
+  "projectType": "api-service",
+  "projectName": "CalenderyBack",
+  "projectDescription": "A Spring Boot REST API and WebSocket backend for a social calendar application, providing user authentication, publications, real-time messaging, comments, likes, and follower management.",
+  "theme": "luma",
+  "primaryColor": "#4F6AF5",
+  "lightColor": "#EEF1FE",
+  "darkColor": "#1E2A6E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/security",
+              "concepts/websockets"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Users",
+            "pages": [
+              "api/users/overview",
+              "api/users/registration",
+              "api/users/profile",
+              "api/users/settings"
+            ]
+          },
+          {
+            "group": "Publications",
+            "pages": [
+              "api/publications/overview",
+              "api/publications/feed",
+              "api/publications/likes-comments"
+            ]
+          },
+          {
+            "group": "Social",
+            "pages": [
+              "api/social/followers",
+              "api/social/search"
+            ]
+          },
+          {
+            "group": "Messaging",
+            "pages": [
+              "api/messaging/chats",
+              "api/messaging/messages",
+              "api/messaging/websocket"
+            ]
+          },
+          {
+            "group": "Errors",
+            "pages": [
+              "api/errors"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "User registration with email verification and account activation",
+    "HTTP Basic authentication with role-based access control (Spring Security)",
+    "Calendar-based publication system with Supabase Storage media upload",
+    "Real-time private messaging via STOMP over WebSocket",
+    "Social graph: follow/unfollow users with follower/following lists",
+    "Publication likes and comments",
+    "End-to-end encryption support via public key exchange",
+    "Paginated feeds and search for users and publications",
+    "PostgreSQL persistence via Spring Data JPA with Hexagonal (ports & adapters) architecture",
+    "Dockerized deployment with multi-stage Maven build"
+  ],
+  "publicApiSurface": [
+    "POST /api/users/auth/register",
+    "GET /api/users/registrationConfirm?token={token}",
+    "POST /api/users/auth/login",
+    "GET /api/users/auth/validateUser?email={email}",
+    "GET /api/users/auth/resendRegistrationToken?idUsuario={id}",
+    "GET /api/users/{id}",
+    "GET /api/users/email/{email}",
+    "GET /api/users",
+    "PUT /api/users",
+    "DELETE /api/users/{id}",
+    "DELETE /api/users/all",
+    "GET /api/users/activeAccountConfirmation?idUsuario={id}",
+    "GET /api/users/app/getUploadProfileSignedUrl",
+    "GET /api/users/app/getUserSettings?idUsuario={id}",
+    "GET /api/users/app/getUserProfile?idUsuario={id}",
+    "PUT /api/users/app/updateUserSetting?idUsuario={id}",
+    "GET /api/users/app/getUserCommentData",
+    "GET /api/users/app/getUserContacts?nombre={name}",
+    "GET /api/users/app/getSearchUsers?nombre={name}",
+    "GET /api/users/app/getPublicKey?idUsuario={id}",
+    "GET /api/users/app/checkPublicKey?idUsuario={id}&clavePublica={key}",
+    "PUT /api/users/app/publicKey?userId={id}",
+    "GET /api/publication/app/getProfilePosts?idUsuario={id}&month={m}&year={y}",
+    "GET /api/publication/app/getPostUrl",
+    "PUT /api/publication/app/putPublicationData",
+    "GET /api/publication/app/getHomePublications",
+    "DELETE /api/publication/app/deletePublication?idPublicacion={id}",
+    "POST /api/comment/app/postComment",
+    "GET /api/comment/app/getComments?idPublicacion={id}",
+    "DELETE /api/comment/app/deleteComment?idComentario={id}",
+    "POST /api/like/app/likePublication?idPublicacion={id}",
+    "DELETE /api/like/app/removeLikePublication?idPublicacion={id}",
+    "PUT /api/follower/app/follow?idUsuario={id}&userToFollowId={id}",
+    "DELETE /api/follower/app/unfollow?idUsuario={id}&userToUnFollowId={id}",
+    "GET /api/follower/app/getUserFollowers?idUsuario={id}&nombre={name}",
+    "GET /api/follower/app/getUserFollowing?idUsuario={id}&nombre={name}",
+    "POST /api/chat/saveChat",
+    "GET /api/chat/getChat?idChat={id}",
+    "GET /api/chat/getUserChats?idUsuario={id}",
+    "GET /api/chat/getUserChat?idUsuario={id}",
+    "GET /api/messages/app/getChatMessages?idChat={id}&usuarioActual={id}",
+    "PUT /api/messages/app/changeMessageToDeliveredState?idMensaje={id}",
+    "PUT /api/messages/app/changeMessageToReadedState?idMensaje={id}",
+    "PUT /api/messages/app/changeAllChatMessagesToReadedState?idUsuario={id}&idChat={id}",
+    "GET /api/messages/app/checkForPendingMessages",
+    "WS /ws-endpoint (STOMP) - @MessageMapping /app/secured/chat",
+    "WS /ws-endpoint (STOMP) - @MessageMapping /app/chat.sendPrivate"
+  ]
+}

@@ -1,0 +1,184 @@
+---
+title: "Send Messages in Real Time via STOMP WebSocket"
+sidebarTitle: "WebSocket"
+description: "Connect to CalenderyBack's STOMP WebSocket endpoint, subscribe to your private message queue, and send messages to other users in real time."
+---
+
+## Overview
+
+CalenderyBack uses **STOMP over WebSocket** to push messages between users in real time. The STOMP layer is provided by Spring's `@EnableWebSocketMessageBroker` and an in-memory broker. Every destination under `/app/**`, every subscription to `/user/**`, and every subscription to `/topic/**` requires an authenticated session.
+
+<Warning>
+The WebSocket endpoint is currently configured with `.setAllowedOrigins("*")`, which permits connections from any origin. **Before deploying to production, restrict this to your actual front-end domain(s)** to prevent cross-site WebSocket hijacking.
+</Warning>
+
+---
+
+## Broker configuration
+
+| Setting                        | Value                |
+| ------------------------------ | -------------------- |
+| STOMP handshake endpoint       | `/ws-endpoint`       |
+| Application destination prefix | `/app`               |
+| User destination prefix        | `/user`              |
+| Simple broker destinations     | `/topic`, `/queue`   |
+
+---
+
+## 1. Connect
+
+Open a STOMP connection to `ws://host:8080/ws-endpoint`. Authenticate using **HTTP Basic** in the `Authorization` header during the WebSocket handshake — the same credentials used for the REST API.
+
+```
+ws://localhost:8080/ws-endpoint
+```
+
+---
+
+## 2. Subscribe to your private message queue
+
+After connecting, subscribe to `/user/queue/mensajes` to receive incoming private messages addressed to you. Spring's user-destination support automatically scopes this subscription to the currently authenticated user, so each client only receives their own messages.
+
+```
+/user/queue/mensajes
+```
+
+The payload delivered to this queue is a `MessageResponseDto` (see [Response shape](#messageresponsedto) below).
+
+---
+
+## 3. Send a private message
+
+Publish to `/app/chat.sendPrivate` with a `MessageDto` JSON body. The server will:
+
+1. Persist the message to PostgreSQL (state `ENVIADO`)
+2. Deliver the saved message to the recipient's queue at `/user/{recipientEmail}/queue/mensajes`
+
+**MessageDto fields**
+
+| Field          | Type            | Required | Description                                             |
+| -------------- | --------------- | -------- | ------------------------------------------------------- |
+| `id`           | `Long`          | —        | Ignored on send; populated by the server after save     |
+| `chatId`       | `Long`          | ✅        | ID of the chat this message belongs to                  |
+| `fromUser`     | `Long`          | ✅        | ID of the sending user                                  |
+| `toUser`       | `Long`          | ✅        | ID of the intended recipient                            |
+| `content`      | `String`        | ✅        | Message text as seen by the recipient                   |
+| `selfMessage`  | `String`        | ✅        | Message text as stored for the sender's own history     |
+| `timeStamp`    | `LocalDateTime` | —        | Ignored on send; set by the server at persist time      |
+| `messageState` | `EstadoMensaje` | —        | Ignored on send; initially set to `ENVIADO` by the server |
+
+<Note>
+Every message is persisted to PostgreSQL **before** being forwarded to the recipient's queue. If the recipient is offline at the time of sending, the message is not lost — it will be loaded the next time they call the [GET /api/messages/app/getChatMessages](/api/messaging/messages) REST endpoint and can then be acknowledged via the delivery/read state endpoints.
+</Note>
+
+---
+
+## 4. Broadcast channel
+
+For broadcast messaging (e.g. group announcements or testing), publish to `/app/secured/chat`. All subscribers to `/secured/history` will receive the message. Both the publish destination and the subscription destination require an authenticated session.
+
+| Action    | Destination          |
+| --------- | -------------------- |
+| Publish   | `/app/secured/chat`  |
+| Subscribe | `/secured/history`   |
+
+---
+
+## MessageResponseDto
+
+This is the object shape delivered to `/user/queue/mensajes` after a private message is sent, and also returned by the REST history endpoint.
+
+| Field           | Type            | Description                                                           |
+| --------------- | --------------- | --------------------------------------------------------------------- |
+| `idMensaje`     | `Long`          | Unique identifier of the message                                      |
+| `idChat`        | `Long`          | ID of the chat this message belongs to                                |
+| `idUsuario`     | `Long`          | ID of the user who sent the message                                   |
+| `contenido`     | `String`        | Message text (always the plain `content` copy when received via WS)   |
+| `timeStamp`     | `LocalDateTime` | Server-assigned timestamp at persist time                             |
+| `estadoMensaje` | `EstadoMensaje` | Current state: `ENVIADO`, `ENTREGADO`, or `LEIDO`                    |
+
+---
+
+## Full JavaScript example
+
+The example below uses the [`@stomp/stompjs`](https://stomp-js.github.io/stomp-websocket/) client library.
+
+```javascript
+import { Client } from '@stomp/stompjs';
+
+const client = new Client({
+  brokerURL: 'ws://localhost:8080/ws-endpoint',
+  connectHeaders: {
+    // HTTP Basic credentials for the STOMP handshake
+    Authorization: 'Basic ' + btoa('user@example.com:password')
+  },
+  onConnect: () => {
+    // Subscribe to incoming private messages for the authenticated user
+    client.subscribe('/user/queue/mensajes', (message) => {
+      const msg = JSON.parse(message.body);
+      console.log('Received message:', msg);
+      // msg shape: { idMensaje, idChat, idUsuario, contenido, timeStamp, estadoMensaje }
+
+      // Acknowledge delivery via REST after receiving the message
+      fetch(
+        `/api/messages/app/changeMessageToDeliveredState?idMensaje=${msg.idMensaje}`,
+        {
+          method: 'PUT',
+          headers: { Authorization: 'Basic ' + btoa('user@example.com:password') }
+        }
+      );
+    });
+  }
+});
+
+// Activate (open the WebSocket connection)
+client.activate();
+
+// Send a private message to user with ID 2
+client.publish({
+  destination: '/app/chat.sendPrivate',
+  body: JSON.stringify({
+    chatId: 42,
+    fromUser: 1,
+    toUser: 2,
+    content: 'Hello!',
+    selfMessage: 'Hello!'
+  })
+});
+```
+
+### Subscribe to the broadcast channel
+
+```javascript
+// Subscribe to broadcast history
+client.subscribe('/secured/history', (message) => {
+  console.log('Broadcast message:', JSON.parse(message.body));
+});
+
+// Publish a broadcast message
+client.publish({
+  destination: '/app/secured/chat',
+  body: JSON.stringify({
+    chatId: 0,
+    fromUser: 1,
+    toUser: 0,
+    content: 'Announcement for everyone',
+    selfMessage: 'Announcement for everyone'
+  })
+});
+```
+
+---
+
+## Security summary
+
+All WebSocket messaging destinations are secured via `SocketSecurityConfig`:
+
+| Destination pattern           | Requirement     |
+| ----------------------------- | --------------- |
+| `/app/**`                     | Authenticated   |
+| `/user/**` (subscriptions)    | Authenticated   |
+| `/topic/**` (subscriptions)   | Authenticated   |
+| Any other message             | Authenticated   |
+
+CSRF protection on the WebSocket channel is intentionally disabled via a no-op `ChannelInterceptor` to allow stateless HTTP Basic authentication.

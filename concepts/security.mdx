@@ -1,0 +1,297 @@
+---
+title: "Security Model and Role-Based Access Control"
+sidebarTitle: "Security"
+description: "CalenderyBack uses Spring Security with HTTP Basic auth, BCrypt password encoding, and method-level @PreAuthorize checks to enforce ownership on sensitive endpoints."
+---
+
+## Overview
+
+CalenderyBack's security model is built on three complementary pillars:
+
+1. **HTTP Basic authentication** — credentials are verified on every request against a `UserDetailsService` backed by the database.
+2. **BCrypt password hashing** — passwords are never stored or compared in plain text.
+3. **Method-level ownership checks** — `@PreAuthorize` expressions ensure that even an authenticated user cannot touch another user's data.
+
+All configuration lives in `com.rubenmartin.calenderyback.common.security`.
+
+---
+
+## Spring Security Configuration
+
+`SecurityConfig` is the central class. It is annotated with `@EnableWebSecurity` and `@EnableMethodSecurity` (which activates `@PreAuthorize` support).
+
+```java
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+@EnableSpringDataWebSupport(pageSerializationMode = PageSerializationMode.VIA_DTO)
+@ComponentScan("com.rubenmartin.calenderyback.common.security")
+public class SecurityConfig {
+
+    private final MyUserDetailsService userDetailsService;
+
+    public SecurityConfig(MyUserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/users/auth/register").permitAll()
+                .requestMatchers("/api/users/registrationConfirm").permitAll()
+                .requestMatchers("/api/users/auth/resendRegistrationToken").permitAll()
+                .requestMatchers("/api/users/auth/validateUser").permitAll()
+                .requestMatchers("/api/users/app/**").hasRole("USER")
+                .requestMatchers("/api/publication/app/**").hasRole("USER")
+                .requestMatchers("/api/chat/**").hasRole("USER")
+                .requestMatchers("/chat/**").hasRole("USER")
+                .requestMatchers("/ws-endpoint/**").hasRole("USER")
+                .requestMatchers("/", "/chatTest.html", "/index.html",
+                                 "/static/**", "/*.js", "/*.css", "/favicon.ico").permitAll()
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .userDetailsService(userDetailsService)
+            .httpBasic(Customizer.withDefaults());
+
+        return http.build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+<Warning>
+**CSRF protection is disabled** (`AbstractHttpConfigurer::disable`). This is intentional for a stateless REST API: there are no session cookies for an attacker to hijack, so the CSRF token mechanism provides no benefit and would only break API clients. If you ever add a browser-facing form that relies on a session cookie, you must re-enable CSRF for those routes.
+</Warning>
+
+---
+
+## Route Authorization Rules
+
+The following table summarises every URL pattern and its access policy:
+
+| URL Pattern | Access Policy |
+|---|---|
+| `POST /api/users/auth/register` | Public — no authentication required |
+| `GET /api/users/registrationConfirm` | Public — email confirmation link |
+| `GET /api/users/auth/resendRegistrationToken` | Public — resend verification email |
+| `GET /api/users/auth/validateUser` | Public — check if an email is registered |
+| `/api/users/app/**` | Requires `ROLE_USER` |
+| `/api/publication/app/**` | Requires `ROLE_USER` |
+| `/api/chat/**` | Requires `ROLE_USER` |
+| `/chat/**` | Requires `ROLE_USER` |
+| `/ws-endpoint/**` | Requires `ROLE_USER` |
+| `/`, `/*.html`, `/static/**`, `/*.js`, `/*.css`, `/favicon.ico` | Public — static assets |
+| `OPTIONS /**` | Public — allows browser CORS preflight requests |
+| Everything else | Requires any authenticated user |
+
+`hasRole("USER")` is shorthand for `hasAuthority("ROLE_USER")` — Spring Security automatically prepends the `ROLE_` prefix when using `hasRole()`.
+
+---
+
+## Password Encoding
+
+The `BCryptPasswordEncoder` bean is declared in `SecurityConfig` and used throughout the application. When a new user registers, `RegisterUserHandler` hashes their password with a cost factor of 12 before persisting it:
+
+```java
+BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
+String hashed = encoder.encode(request.getKeypass());
+```
+
+The raw password is never stored. On subsequent logins, Spring Security calls `passwordEncoder().matches(rawPassword, storedHash)` automatically as part of the `DaoAuthenticationProvider` flow.
+
+<Tip>
+To add new roles, insert a row into the `rol` table (e.g. `ROLE_ADMIN`) and assign it to a user via the `user_roles` join table. Then add the corresponding `hasRole("ADMIN")` matchers in `SecurityConfig.securityFilterChain()`. No code changes are required in the domain or application layers.
+</Tip>
+
+---
+
+## User Details Service
+
+`MyUserDetailsService` implements Spring Security's `UserDetailsService` interface. It loads a user by email (which acts as the username) and wraps the result in a `CustomUserSecurity` record:
+
+```java
+@Service
+@RequiredArgsConstructor
+public class MyUserDetailsService implements UserDetailsService {
+
+    @Autowired
+    private UserRepositoryPort userRepositoryPort;
+
+    @Override
+    @Transactional
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        User user = userRepositoryPort.findUserByEmail(email)
+                .orElseThrow(() -> new UsernameNotFoundException(email));
+
+        return new CustomUserSecurity(
+                user.getIdUsuario(),
+                user.getEmail(),
+                user.getKeypass(),
+                user.isEnable(),           // maps to UserDetails.isEnabled()
+                getAuthorities(user.getRoles()));
+    }
+
+    private static List<GrantedAuthority> getAuthorities(List<Rol> roles) {
+        List<GrantedAuthority> authorities = new ArrayList<>();
+        for (Rol role : roles) {
+            authorities.add(new SimpleGrantedAuthority(role.getRolName()));
+        }
+        return authorities;
+    }
+}
+```
+
+---
+
+## `CustomUserSecurity` — The Principal Object
+
+`CustomUserSecurity` is a Java `record` that implements `UserDetails`. It is the **principal** object stored in the `SecurityContext` and referenced in every `@PreAuthorize` expression:
+
+```java
+public record CustomUserSecurity(
+    Long idUsuario,
+    String email,
+    String password,
+    boolean enabled,
+    Collection<? extends GrantedAuthority> authorities
+) implements UserDetails {
+
+    @Override public String getUsername() { return email; }
+    @Override public String getPassword() { return password; }
+    @Override public boolean isEnabled()  { return enabled; }
+    // isAccountNonExpired, isAccountNonLocked, isCredentialsNonExpired → always true
+}
+```
+
+The `idUsuario` field is the key that ownership checks use to bind a request parameter to the currently authenticated user.
+
+---
+
+## Email Verification and the `enable` Flag
+
+When a user registers, the `enable` field on `User` is set to `false`:
+
+```java
+User newUser = User.builder()
+        .nombre(request.getNombre())
+        .email(request.getEmail())
+        .keypass(hashed)
+        .enable(false)      // account is inactive until the email link is clicked
+        .build();
+```
+
+After registration, an `OnRegistrationCompleteEvent` is published. A listener sends an email containing a unique token. When the user visits `GET /api/users/registrationConfirm?token=…`, the handler sets `user.setEnable(true)` and saves the user.
+
+`MyUserDetailsService` passes `user.isEnable()` directly to `CustomUserSecurity`. Because `CustomUserSecurity.isEnabled()` returns `false` for unconfirmed accounts, Spring Security's `DaoAuthenticationProvider` will throw a `DisabledException` and reject the login attempt with `HTTP 401`.
+
+The `User` domain entity's `enable` field:
+
+```java
+public class User {
+    Long idUsuario;
+    String nombre;
+    String email;
+    String descripcion;
+    String keypass;
+    String fotoPerfil;
+    String clavePublica;
+    List<Rol> roles;
+    List<Follower> followers;
+    List<Follower> followings;
+    boolean enable;           // ← false until email is confirmed
+}
+```
+
+---
+
+## Ownership Checks with `@PreAuthorize`
+
+`@EnableMethodSecurity` (declared on `SecurityConfig`) activates Spring Security's method-level security, which evaluates SpEL expressions against the security context before the method body executes.
+
+The pattern used throughout CalenderyBack is:
+
+```java
+@PreAuthorize("#userId == authentication.principal.idUsuario")
+```
+
+This expression compares the `userId` **request parameter** (bound by name via `#userId`) with the `idUsuario` field of the currently authenticated `CustomUserSecurity` principal. If the values do not match, Spring Security throws an `AccessDeniedException` before the handler is invoked — no business logic runs, and the client receives `HTTP 403`.
+
+The following endpoints are protected by ownership checks:
+
+| Method | Endpoint | Protected Parameter |
+|---|---|---|
+| `PUT` | `/api/follower/app/follow` | `#userId` |
+| `DELETE` | `/api/follower/app/unfollow` | `#userId` |
+| `PUT` | `/api/users/app/publicKey` | `#userId` |
+| `GET` | `/api/users/app/getUserSettings` | `#id` |
+| `GET` | `/api/users/activeAccountConfirmation` | `#idUsuario` |
+| `GET` | `/api/users/app/checkPublicKey` | `#userId` |
+| `PUT` | `/api/users/app/updateUserSetting` | `#id` |
+
+Example from `UserController`:
+
+```java
+@PutMapping("/app/publicKey")
+@PreAuthorize("#userId == authentication.principal.idUsuario")
+public ResponseEntity<Void> putUserPublicKey(
+        @RequestParam("userId") Long userId,
+        @RequestBody PublicKeyDto publicKey) {
+    // Only reached if the authenticated user's ID matches userId
+    …
+}
+```
+
+And from `FollowerController`:
+
+```java
+@PutMapping("/app/follow")
+@PreAuthorize("#userId == authentication.principal.idUsuario")
+public ResponseEntity<Void> follow(
+        @RequestParam("idUsuario") Long userId,
+        @RequestParam("userToFollowId") Long userToFollowId) {
+    …
+}
+```
+
+---
+
+## WebSocket Security
+
+WebSocket message channels are secured independently by `SocketSecurityConfig`, which is annotated with `@EnableWebSocketSecurity`:
+
+```java
+@Configuration
+@EnableWebSocketSecurity
+public class SocketSecurityConfig {
+
+    @Bean
+    AuthorizationManager<Message<?>> messageAuthorizationManager(
+            MessageMatcherDelegatingAuthorizationManager.Builder messages) {
+        messages
+            .simpDestMatchers("/app/**").authenticated()
+            .simpSubscribeDestMatchers("/user/**", "/topic/**").authenticated()
+            .anyMessage().authenticated();
+
+        return messages.build();
+    }
+
+    @Bean("csrfChannelInterceptor")
+    public ChannelInterceptor csrfChannelInterceptor() {
+        return new ChannelInterceptor() {};   // no-op — CSRF disabled for WebSocket too
+    }
+}
+```
+
+This configuration requires authentication for:
+- Sending to any `/app/**` destination (i.e., any `@MessageMapping` handler)
+- Subscribing to `/user/**` (private queues) or `/topic/**` (broadcast topics)
+- Any other STOMP frame
+
+HTTP Basic credentials must be included in the WebSocket handshake headers. Spring Security's `AuthorizationChannelInterceptor` enforces these rules at the STOMP protocol level, not just at the HTTP upgrade level.

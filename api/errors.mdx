@@ -1,0 +1,104 @@
+---
+title: "Error Responses and Exception Handling"
+sidebarTitle: "Errors"
+description: "CalenderyBack returns structured JSON error responses for all exceptions. This reference lists every error type, HTTP status, and the ErrorMessage schema."
+---
+
+## Overview
+
+CalenderyBack uses a centralised `@RestControllerAdvice` (`ApiExceptionHandler`) to intercept all application exceptions and return a consistent JSON error envelope. Every error response — whether a validation failure, a missing resource, or a business rule violation — shares the same `ErrorMessage` structure.
+
+---
+
+## The `ErrorMessage` Schema
+
+```java
+// com.rubenmartin.calenderyback.common.exceptions.ErrorMessage
+public class ErrorMessage {
+    private String message;       // Human-readable description of the error
+    private String exception;     // Simple class name of the thrown exception
+    private String path;          // Request URI that triggered the error
+    private Map<String, String> errors; // Field-level validation errors (400 only)
+}
+```
+
+| Field | Type | Always present | Description |
+|---|---|---|---|
+| `message` | `String` | ✅ | The exception's message, describing what went wrong |
+| `exception` | `String` | ✅ | Simple class name of the Java exception (e.g. `"UserNotFoundException"`) |
+| `path` | `String` | ✅ | The request URI that triggered the error (e.g. `"/api/users/app/getSearchUsers"`) |
+| `errors` | `Map<String, String>` | ✅ | Key-value map of field name → validation message. Empty `{}` for non-validation errors. |
+
+<Tip>
+  When multiple exceptions share the same HTTP status code, use the **`exception`
+  field** to distinguish them programmatically. For example, both
+  `UserNotFoundException` and `UserAlreadyExistException` return `404`, but their
+  `exception` values are different — so you can branch your error-handling logic
+  on that field without inspecting the `message` string.
+</Tip>
+
+---
+
+## Example Error Responses
+
+### 404 Not Found — Resource Missing
+
+```json
+{
+  "message": "User not found with id: 999",
+  "exception": "UserNotFoundException",
+  "path": "/api/users/999",
+  "errors": {}
+}
+```
+
+### 400 Bad Request — Validation Failure
+
+When a request body fails Jakarta Bean Validation (`@Valid`), each failing field is listed in the `errors` map:
+
+```json
+{
+  "message": "Validation failed for argument...",
+  "exception": "MethodArgumentNotValidException",
+  "path": "/api/users/auth/register",
+  "errors": {
+    "email": "must be a well-formed email address",
+    "nombre": "must not be blank"
+  }
+}
+```
+
+---
+
+## Complete Error Reference
+
+<Note>
+  Several exceptions that represent logically different situations — such as a
+  resource genuinely not existing (`UserNotFoundException`) and a resource
+  already existing (`UserAlreadyExistException`) — are both mapped to
+  **`404 Not Found`**. This is a quirk of the current implementation rather
+  than a REST best-practice recommendation (a strict REST API would return `409
+  Conflict` for duplicates). Always inspect the `exception` field to understand
+  the actual cause.
+</Note>
+
+| Exception Class | HTTP Status | Trigger Condition |
+|---|---|---|
+| `MethodArgumentNotValidException` | `400 Bad Request` | A `@Valid`-annotated request body fails Jakarta Bean Validation; field-level errors are populated in the `errors` map |
+| `UserNotFoundException` | `404 Not Found` | No user exists for the provided ID or email |
+| `UserAlreadyExistException` | `404 Not Found` | Attempting to register with an email address that is already in use |
+| `RolNotFoundException` | `404 Not Found` | The requested role does not exist in the database |
+| `TokenNotFoundException` | `404 Not Found` | No verification token matches the provided token string |
+| `ExpiredVerificationTokenException` | `401 Unauthorized` | The provided email-verification token has passed its expiry time |
+| `DisabledException` | `401 Unauthorized` | The account exists but has not yet been verified / enabled |
+| `UserDisableAccountException` | `404 Not Found` | The account has been explicitly disabled by an admin |
+| `MessageNotFoundException` | `404 Not Found` | No message exists for the provided message ID |
+| `ChatNotFoundException` | `404 Not Found` | No chat exists for the provided chat ID |
+| `PublicationNotFoundException` | `404 Not Found` | No publication exists for the provided publication ID |
+| `FollowerNotFoundException` | `404 Not Found` | The requested follower relation record does not exist |
+| `PublicationLikeNotFoundedException` | `404 Not Found` | No like record exists for the given publication and user combination |
+| `UserNotFollowingException` | `406 Not Acceptable` | Attempting to unfollow a user that the authenticated user is not currently following |
+| `PublicKeyNotFoundException` | `404 Not Found` | The requested user has not yet set a public encryption key |
+| `MessageStateNoUpdatedException` | `406 Not Acceptable` | A message read-state update could not be applied (e.g. invalid state transition) |
+| `PublicKeyNotCoincidentException` | `406 Not Acceptable` | The provided public key does not match the key stored for that user |
+| `CommentNotDeletedException` | `406 Not Acceptable` | Attempting to delete a comment that belongs to a different user (author mismatch) |

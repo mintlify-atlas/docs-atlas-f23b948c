@@ -1,0 +1,139 @@
+---
+title: "CalenderyBack: Social Calendar API Backend"
+sidebarTitle: "Introduction"
+description: "CalenderyBack is a Spring Boot REST and WebSocket API server for a social calendar app — publications, messaging, social graph, and user management in one service."
+---
+
+## What is CalenderyBack?
+
+CalenderyBack is the backend service powering a **social calendar application**. It is built with **Spring Boot 4** on **Java 21** and exposes a combined REST + WebSocket API that handles everything from user accounts and publications to real-time chat.
+
+| Attribute          | Value                                        |
+|--------------------|----------------------------------------------|
+| **Framework**      | Spring Boot 4.0.3                            |
+| **Language**       | Java 21                                      |
+| **Architecture**   | Hexagonal (Ports & Adapters)                 |
+| **Database**       | PostgreSQL (via Spring Data JPA / Hibernate) |
+| **File Storage**   | Supabase Storage (profile avatars bucket)    |
+| **Security**       | Spring Security — HTTP Basic authentication  |
+| **Real-time**      | STOMP over WebSocket (`/ws-endpoint`)        |
+| **Email**          | Spring Mail (SMTP / Gmail)                   |
+
+---
+
+## Functional Domains
+
+CalenderyBack is organised into **six cohesive functional domains**, each with its own package tree under `com.rubenmartin.calenderyback`:
+
+| Domain              | Responsibility                                                                     |
+|---------------------|------------------------------------------------------------------------------------|
+| **Users**           | Registration, authentication, profile settings, avatar upload, public-key exchange |
+| **Publications**    | Create, read, and manage social calendar posts                                      |
+| **Comments & Likes**| Threaded comments and like reactions on publications                                |
+| **Followers**       | Social graph — follow/unfollow, follower counts, feed curation                     |
+| **Chat**            | Peer-to-peer chat rooms created between two users                                  |
+| **Messages**        | Individual messages within a chat, delivered in real-time over WebSocket            |
+
+---
+
+## Architecture Overview
+
+CalenderyBack follows the **hexagonal (ports-and-adapters) architecture**: the domain layer has no dependency on the framework layer, and all cross-layer communication flows through well-defined interfaces.
+
+### Layer breakdown
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Infrastructure (API / DB)                           │
+│  ┌──────────────────┐   ┌────────────────────────┐  │
+│  │  REST Controllers │   │  JPA Repository Impls  │  │
+│  └────────┬─────────┘   └──────────┬─────────────┘  │
+│           │                        │                  │
+│  ┌────────▼────────────────────────▼─────────────┐   │
+│  │  Application Layer  (Commands / Queries)       │   │
+│  │  dispatched through the Mediator               │   │
+│  └────────────────────────┬──────────────────────┘   │
+│                           │                           │
+│  ┌────────────────────────▼──────────────────────┐   │
+│  │  Domain  (Entities, Value Objects, Ports)      │   │
+│  └───────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────┘
+```
+
+### Mediator pattern
+
+All application-layer operations — whether commands (writes) or queries (reads) — are dispatched through a central `Mediator` bean. Each operation is encapsulated in a **Request** object and handled by a dedicated **RequestHandler**:
+
+```java
+// Dispatch a query from any controller
+GetUserByIdResponse response = mediator.dispatch(new GetUserByIdRequest(id));
+
+// The Mediator routes to the matching handler at startup
+public <R, T extends Request<R>> R dispatch(T request) {
+    RequestHandler<T, R> handler =
+        (RequestHandler<T, R>) requestHandlerMap.get(request.getClass());
+    if (handler == null)
+        throw new RuntimeException("No handler found for " + request.getClass());
+    return handler.handle(request);
+}
+```
+
+This means adding a new feature requires only a new `Request` + `RequestHandler` pair — the controller and the mediator wiring need no changes.
+
+---
+
+## Authentication Model
+
+CalenderyBack uses **HTTP Basic authentication** managed by Spring Security.
+
+- **Public routes** (no credentials required): registration, email confirmation, token resend, user validation.
+- **Protected routes** (`/api/users/app/**`, `/api/publication/app/**`, `/api/chat/**`, `/ws-endpoint/**`): require `ROLE_USER`.
+- **Ownership-guarded routes**: sensitive endpoints additionally use `@PreAuthorize` to verify the authenticated user matches the resource owner.
+
+See the [Authentication guide](/authentication) for full details and curl examples.
+
+---
+
+## Real-time Capability
+
+Chat messages are delivered in real-time using **STOMP over WebSocket**, mounted at `/ws-endpoint`. The WebSocket layer is secured by the same Spring Security filter chain — only `ROLE_USER` principals may connect. Clients subscribe to per-chat topics and receive pushed message events without polling.
+
+---
+
+## Key Dependencies
+
+| Library                         | Purpose                                   |
+|---------------------------------|-------------------------------------------|
+| `spring-boot-starter-webmvc`    | REST API                                  |
+| `spring-boot-starter-security`  | HTTP Basic auth, method-level security    |
+| `spring-boot-starter-data-jpa`  | ORM / database access (PostgreSQL)        |
+| `spring-boot-starter-websocket` | STOMP / WebSocket real-time messaging     |
+| `spring-boot-starter-mail`      | Email verification on registration        |
+| `spring-boot-starter-validation`| Bean Validation (`@NotBlank`, `@Valid`)   |
+| `mapstruct` 1.6.2               | DTO ↔ domain / entity mapping             |
+| `lombok`                        | Boilerplate reduction (`@Data`, etc.)     |
+
+---
+
+<Note>
+  CalenderyBack follows the **hexagonal (ports-and-adapters) architecture** pattern. Domain entities and business rules live in the `domain` package and are completely framework-free. The `application` layer contains use-case commands and queries. The `infrastructure` layer provides JPA implementations and REST controllers — both of which are treated as *adapters* that plug into the domain *ports*. This separation ensures the core business logic can be tested in isolation without loading the Spring context.
+</Note>
+
+---
+
+## Explore the Docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Run the server locally, register a user, confirm your email, and make your first authenticated API call in five steps.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/authentication">
+    Understand HTTP Basic auth, the registration + email verification flow, public vs protected routes, and public-key exchange.
+  </Card>
+  <Card title="Architecture Concepts" icon="sitemap" href="/introduction#architecture-overview">
+    Dive deeper into the hexagonal architecture, the Mediator pattern, and how commands and queries are structured.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/users/overview">
+    Full endpoint reference for all six domains: Users, Publications, Comments & Likes, Followers, Chat, and Messages.
+  </Card>
+</CardGroup>

@@ -1,0 +1,203 @@
+---
+title: "Followers and Following REST Endpoints"
+sidebarTitle: "Followers"
+description: "Follow or unfollow users, list a user's followers and following with name-based filtering, and check follow relationships using the CalenderyBack followers API."
+---
+
+## Overview
+
+The followers API lets authenticated users build and manage a social graph. Every follow action creates a directional **Follower** relation — one user follows another — while every unfollow action removes it. Both listing endpoints are paginated and support real-time name filtering.
+
+### The Follower Domain Entity
+
+A `Follower` record represents a single directed relationship between two users:
+
+| Field | Type | Description |
+|---|---|---|
+| `followerId` | `Long` | Auto-generated primary key for the relation |
+| `userFollow` | `User` | The user who initiated the follow (the follower) |
+| `userFollowed` | `User` | The user being followed (the followee) |
+
+The relationship is **unidirectional**: user A following user B does not imply that user B follows user A.
+
+<Note>
+  All write endpoints (`follow` and `unfollow`) are guarded by a Spring Security
+  `@PreAuthorize("# userId == authentication.principal.idUsuario")` expression.
+  This means the `idUsuario` query parameter **must match the ID of the currently
+  authenticated user** — you cannot follow or unfollow someone on behalf of
+  another user. Attempting to do so will result in a `403 Forbidden` response
+  before the handler is ever reached.
+</Note>
+
+---
+
+## Endpoints
+
+### Follow a User
+
+<code>PUT /api/follower/app/follow</code>
+
+Creates a `Follower` relation so that `idUsuario` follows `userToFollowId`.
+
+**Required role:** `ROLE_USER` (ownership-checked — see note above)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idUsuario` | `Long` | ✅ | ID of the authenticated user who wants to follow |
+| `userToFollowId` | `Long` | ✅ | ID of the user to be followed |
+
+#### Responses
+
+| Status | Description |
+|---|---|
+| `200 OK` | Follow relation created successfully. Empty body. |
+| `403 Forbidden` | `idUsuario` does not match the authenticated user's ID. |
+
+#### Example
+
+```bash
+curl -X PUT \
+  "https://api.example.com/api/follower/app/follow?idUsuario=42&userToFollowId=99" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```
+
+---
+
+### Unfollow a User
+
+<code>DELETE /api/follower/app/unfollow</code>
+
+Removes the `Follower` relation between `idUsuario` and `userToUnFollowId`.
+
+**Required role:** `ROLE_USER` (ownership-checked — see note above)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idUsuario` | `Long` | ✅ | ID of the authenticated user who wants to unfollow |
+| `userToUnFollowId` | `Long` | ✅ | ID of the user to be unfollowed |
+
+#### Responses
+
+| Status | Description |
+|---|---|
+| `200 OK` | Unfollow successful. Empty body. |
+| `403 Forbidden` | `idUsuario` does not match the authenticated user's ID. |
+| `406 Not Acceptable` | `UserNotFollowingException` — the authenticated user is not currently following the target user. |
+
+#### Example
+
+```bash
+curl -X DELETE \
+  "https://api.example.com/api/follower/app/unfollow?idUsuario=42&userToUnFollowId=99" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```
+
+---
+
+### Get a User's Followers
+
+<code>GET /api/follower/app/getUserFollowers</code>
+
+Returns a paginated list of users who follow the specified user, optionally filtered by name.
+
+**Required role:** `ROLE_USER`
+
+#### Query Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `idUsuario` | `Long` | ✅ | — | ID of the user whose followers to retrieve |
+| `nombre` | `String` | ✅ | — | Name filter (partial match). Pass an empty string to return all followers. |
+| `page` | `int` | ❌ | `0` | Zero-based page index |
+| `size` | `int` | ❌ | `20` | Number of results per page |
+| `sort` | `String` | ❌ | — | Sort field and direction, e.g. `nombre,asc` |
+
+#### Response: `Page<UserReducedData>`
+
+```json
+{
+  "content": [
+    {
+      "idUsuario": 7,
+      "nombre": "alice",
+      "fotoPerfil": "https://cdn.example.com/avatars/signed-url..."
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10
+  },
+  "totalElements": 1,
+  "totalPages": 1,
+  "last": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `idUsuario` | `Long` | Unique user identifier |
+| `nombre` | `String` | Username / display name |
+| `fotoPerfil` | `String` | Signed URL for the user's profile photo |
+
+#### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/follower/app/getUserFollowers?idUsuario=42&nombre=ali&page=0&size=10" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```
+
+---
+
+### Get a User's Following
+
+<code>GET /api/follower/app/getUserFollowing</code>
+
+Returns a paginated list of users that the specified user is following, optionally filtered by name.
+
+**Required role:** `ROLE_USER`
+
+#### Query Parameters
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `idUsuario` | `Long` | ✅ | — | ID of the user whose following list to retrieve |
+| `nombre` | `String` | ✅ | — | Name filter (partial match). Pass an empty string to return all. |
+| `page` | `int` | ❌ | `0` | Zero-based page index |
+| `size` | `int` | ❌ | `20` | Number of results per page |
+| `sort` | `String` | ❌ | — | Sort field and direction, e.g. `nombre,asc` |
+
+#### Response: `Page<UserReducedData>`
+
+Same shape as [Get a User's Followers](#get-a-users-followers).
+
+```json
+{
+  "content": [
+    {
+      "idUsuario": 99,
+      "nombre": "bob",
+      "fotoPerfil": "https://cdn.example.com/avatars/signed-url..."
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10
+  },
+  "totalElements": 1,
+  "totalPages": 1,
+  "last": true
+}
+```
+
+#### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/follower/app/getUserFollowing?idUsuario=42&nombre=&page=0&size=10" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```

@@ -1,0 +1,193 @@
+---
+title: "Publication Likes and Comments Endpoints"
+sidebarTitle: "Likes & Comments"
+description: "Add or remove likes on publications, post comments with author data, retrieve paginated comment threads, and delete your own comments using these six endpoints."
+---
+
+## Likes
+
+### POST /api/like/app/likePublication
+
+Creates a `PublicationLike` record that links the authenticated user to the specified publication. Calling this endpoint on a publication the user has already liked will result in a duplicate — check the `like` field on the publication before calling.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idPublicacion` | `Long` | ✅ | ID of the publication to like |
+
+#### Response
+
+`200 OK` — empty body.
+
+#### Example
+
+```bash
+curl -X POST \
+  "https://api.example.com/api/like/app/likePublication?idPublicacion=42" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### DELETE /api/like/app/removeLikePublication
+
+Removes the `PublicationLike` record that links the authenticated user to the specified publication.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idPublicacion` | `Long` | ✅ | ID of the publication to unlike |
+
+#### Response
+
+<Note>
+  The current implementation of this handler returns `null` instead of a `ResponseEntity`. In practice the HTTP response will have a `200` status with no body, but clients should not rely on a well-formed `ResponseEntity` structure for this endpoint — this is a known behaviour and may be corrected in a future release.
+</Note>
+
+#### Example
+
+```bash
+curl -X DELETE \
+  "https://api.example.com/api/like/app/removeLikePublication?idPublicacion=42" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Comments
+
+### POST /api/comment/app/postComment
+
+Posts a new comment on a publication on behalf of the authenticated user. The author identity is derived from the JWT — it does not need to be included in the request body.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+#### Request Body — `PostCommentDto`
+
+```json
+{
+  "idPublicacion": 42,
+  "comentario": "This looks amazing! 🔥"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `idPublicacion` | `Long` | ✅ | ID of the publication to comment on |
+| `comentario` | `String` | ✅ | Comment text (1 – 300 characters) |
+
+#### Response
+
+`200 OK` — returns the newly created comment's ID as a plain `Long`.
+
+```json
+137
+```
+
+#### Example
+
+```bash
+curl -X POST \
+  "https://api.example.com/api/comment/app/postComment" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idPublicacion": 42,
+    "comentario": "This looks amazing! 🔥"
+  }'
+```
+
+---
+
+### GET /api/comment/app/getComments
+
+Returns a paginated list of comments for a given publication, each enriched with basic author profile data.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idPublicacion` | `Long` | ✅ | ID of the publication whose comments to retrieve |
+| `page` | `int` | — | Zero-based page index (default `0`) |
+| `size` | `int` | — | Items per page (default `20`) |
+| `sort` | `string` | — | Sort expression, e.g. `localDateTimeData,desc` |
+
+#### Response — `Page<CommentDto>`
+
+| Field | Type | Description |
+|---|---|---|
+| `idComentario` | `Long` | Unique comment identifier |
+| `idPublicacion` | `Long` | ID of the publication this comment belongs to |
+| `idUsuario` | `Long` | ID of the comment author |
+| `nombreUsuario` | `String` | Display name of the comment author |
+| `fotoUsuario` | `String` | Profile picture URL of the comment author |
+| `comentario` | `String` | Comment text (max 300 characters) |
+| `localDateTimeData` | `LocalDateTime` | Timestamp when the comment was created |
+
+#### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/comment/app/getComments?idPublicacion=42&page=0&size=20&sort=localDateTimeData,desc" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "content": [
+    {
+      "idComentario": 137,
+      "idPublicacion": 42,
+      "idUsuario": 7,
+      "nombreUsuario": "maria_g",
+      "fotoUsuario": "https://<project>.supabase.co/storage/v1/object/sign/avatars/7.jpg?token=...",
+      "comentario": "This looks amazing! 🔥",
+      "localDateTimeData": "2024-08-15T18:32:00"
+    }
+  ],
+  "totalElements": 1,
+  "totalPages": 1,
+  "number": 0,
+  "size": 20
+}
+```
+
+---
+
+### DELETE /api/comment/app/deleteComment
+
+Deletes a comment. The handler verifies that the authenticated user is the **author** of the comment by checking ownership in the repository layer — if the comment does not belong to the requesting user, the delete operation returns `0` affected rows and a `CommentNotDeletedException` is thrown, resulting in a `406 Not Acceptable` response.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idComentario` | `Long` | ✅ | ID of the comment to delete |
+
+#### Response
+
+`200 OK` — empty body on success.
+
+#### Errors
+
+| Status | Exception | Description |
+|---|---|---|
+| `406 Not Acceptable` | `CommentNotDeletedException` | The comment does not exist or does not belong to the authenticated user |
+
+#### Example
+
+```bash
+curl -X DELETE \
+  "https://api.example.com/api/comment/app/deleteComment?idComentario=137" \
+  -H "Authorization: Bearer <token>"
+```

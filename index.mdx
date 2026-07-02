@@ -1,20 +1,62 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "CalenderyBack: Social Calendar REST API"
+sidebarTitle: "Home"
+description: "CalenderyBack is a Spring Boot backend providing REST and WebSocket APIs for a social calendar app — users, publications, messaging, followers, likes, and comments."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+CalenderyBack is the server-side backbone of a social calendar application built with Spring Boot 4 and Java 21. It exposes a secure REST API plus a real-time STOMP/WebSocket channel for private messaging, backed by PostgreSQL and Supabase Storage for media. All protected endpoints use HTTP Basic auth with Spring Security role-based access control.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the server locally and make your first authenticated API call in minutes.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/authentication">
+    Learn how to register, verify your account, and authenticate all requests.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/users/overview">
+    Browse every REST endpoint — users, publications, social graph, and messaging.
+  </Card>
+  <Card title="WebSocket Messaging" icon="bolt" href="/api/messaging/websocket">
+    Send and receive real-time private messages over STOMP WebSocket.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What CalenderyBack Provides
+
+CalenderyBack ships a complete API surface for building social calendar clients:
+
+<CardGroup cols={2}>
+  <Card title="User Management" icon="user" href="/api/users/overview">
+    Registration with email verification, profile management, and public-key exchange for end-to-end encryption.
+  </Card>
+  <Card title="Publications" icon="calendar" href="/api/publications/overview">
+    Create calendar-linked posts with media stored in Supabase Storage. Fetch home feeds and profile timelines.
+  </Card>
+  <Card title="Social Graph" icon="users" href="/api/social/followers">
+    Follow and unfollow users, list followers and following, and search the user directory.
+  </Card>
+  <Card title="Real-Time Chat" icon="message" href="/api/messaging/chats">
+    Create chats between users and exchange private messages with delivery and read receipts.
+  </Card>
+</CardGroup>
+
+## Getting Started
+
+<Steps>
+  <Step title="Clone and configure">
+    Clone the repository and set the required environment variables (`DATA_BASE_URL`, `SUPABASE_URL`, etc.) as described in the [configuration guide](/deployment/configuration).
+  </Step>
+  <Step title="Build and run">
+    Build the Docker image and start the server on port 8080 with `docker compose up` or by running the JAR directly. See the [Docker deployment guide](/deployment/docker).
+  </Step>
+  <Step title="Register a user">
+    Call `POST /api/users/auth/register` with an email and password. Confirm the verification email to activate the account.
+  </Step>
+  <Step title="Authenticate and explore">
+    Pass `Authorization: Basic <base64(email:password)>` on every protected request. Explore the full [API Reference](/api/users/overview).
+  </Step>
+</Steps>
+
+<Note>
+  All endpoints under `/api/*/app/**` require a user with the `ROLE_USER` role. Public endpoints (registration, confirmation, login) are open without credentials.
+</Note>

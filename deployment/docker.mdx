@@ -1,0 +1,234 @@
+---
+title: "Deploy CalenderyBack with Docker"
+sidebarTitle: "Docker"
+description: "Build and run CalenderyBack using the included multi-stage Dockerfile. The image uses Maven for the build stage and eclipse-temurin:21-jre for the runtime stage."
+---
+
+CalenderyBack ships with a production-ready multi-stage `Dockerfile` that produces a lean, secure runtime image. The build stage compiles the application with Maven while the runtime stage keeps the final image small by including only the JRE.
+
+## The Dockerfile
+
+```dockerfile
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+FROM maven:3.9.4-eclipse-temurin-21 AS build
+
+WORKDIR /app
+
+# Copy only pom.xml first to cache dependencies as a separate layer
+COPY pom.xml .
+RUN mvn dependency:go-offline -q
+
+# Copy source and build the JAR (tests are skipped)
+COPY src ./src
+RUN mvn clean package -DskipTests -q
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM eclipse-temurin:21-jre-jammy
+
+WORKDIR /app
+
+COPY --from=build /app/target/*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", \
+  "-XX:+UseContainerSupport", \
+  "-XX:MaxRAMPercentage=75.0", \
+  "-XX:+OptimizeStringConcat", \
+  "-jar", "app.jar"]
+```
+
+### Stage breakdown
+
+| Stage | Base image | Purpose |
+|-------|-----------|---------|
+| `build` | `maven:3.9.4-eclipse-temurin-21` | Resolves all Maven dependencies offline, then compiles and packages the application JAR |
+| runtime | `eclipse-temurin:21-jre-jammy` | Lean Ubuntu Jammy image containing only the JRE — no build tooling, dramatically smaller attack surface |
+
+### JVM startup flags
+
+Three JVM flags are passed via `ENTRYPOINT`:
+
+| Flag | Effect |
+|------|--------|
+| `-XX:+UseContainerSupport` | Tells the JVM to read memory and CPU limits from the container's cgroup rather than from the host machine |
+| `-XX:MaxRAMPercentage=75.0` | Caps the JVM heap at 75 % of the container's available memory, leaving headroom for native threads and OS buffers |
+| `-XX:+OptimizeStringConcat` | Enables an intrinsic optimizer for string concatenation chains, reducing object allocation pressure |
+
+<Tip>
+  Adjust `MaxRAMPercentage` to suit your deployment tier. For containers with
+  ≤ 512 MB of RAM, `60.0` – `65.0` is a safer ceiling. For containers with
+  ≥ 2 GB of RAM you can raise it to `80.0` without risking heap exhaustion from
+  non-heap memory consumers.
+</Tip>
+
+<Warning>
+  Never hardcode secrets (database passwords, Supabase service keys, SMTP
+  credentials) inside the `Dockerfile` or commit them to version control. All
+  sensitive values must be injected at runtime via `-e` flags, a `.env` file, or
+  a secrets manager — see the [Run the container](#run-the-container) section
+  below.
+</Warning>
+
+---
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) 24 or later
+- A running PostgreSQL instance (local or remote)
+- A Supabase project with a service role key
+- Your four required environment variables ready (see [Configuration](/deployment/configuration))
+
+---
+
+## Build and run
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Rubick65/calenderyBack.git
+    cd calenderyBack
+    ```
+  </Step>
+
+  <Step title="Build the Docker image">
+    Run the following command from the project root (where the `Dockerfile`
+    lives). Docker will execute both build stages and tag the final runtime
+    image as `calenderyback`.
+
+    ```bash
+    docker build -t calenderyback .
+    ```
+
+    The first build takes a few minutes while Maven downloads dependencies into
+    the layer cache. Subsequent builds reuse the cached `dependency:go-offline`
+    layer as long as `pom.xml` has not changed.
+  </Step>
+
+  <Step title="Run the container">
+    Supply all required environment variables with `-e` flags and map the
+    application port:
+
+    ```bash
+    docker run \
+      -e DATA_BASE_URL=jdbc:postgresql://host:5432/calendery \
+      -e DATA_BASE_USERNAME=postgres \
+      -e DATA_BASE_PASSWORD=your_db_password \
+      -e SUPABASE_URL=https://your-project.supabase.co \
+      -e SERVICE_KEY=your_supabase_service_role_key \
+      -p 8080:8080 \
+      calenderyback
+    ```
+
+    Replace the placeholder values with your actual credentials. The application
+    starts on **port 8080** inside the container, which is forwarded to port
+    8080 on the host.
+  </Step>
+
+  <Step title="Verify the application is running">
+    Check that the container is healthy:
+
+    ```bash
+    # List running containers
+    docker ps
+
+    # Tail the application logs
+    docker logs -f <container_id>
+    ```
+
+    You should see Spring Boot's startup banner followed by log output at WARN
+    level. Once started, the API is reachable at `http://localhost:8080`.
+  </Step>
+</Steps>
+
+---
+
+## Docker Compose
+
+For local development or single-host deployments, Docker Compose lets you spin
+up CalenderyBack together with a PostgreSQL database in a single command.
+
+```yaml docker-compose.yml
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: calendery
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DATA_BASE_URL: jdbc:postgresql://db:5432/calendery
+      DATA_BASE_USERNAME: postgres
+      DATA_BASE_PASSWORD: postgres
+      SUPABASE_URL: https://your-project.supabase.co
+      SERVICE_KEY: your_supabase_service_role_key
+
+volumes:
+  postgres_data:
+```
+
+Start the full stack:
+
+```bash
+docker compose up --build
+```
+
+Tear it down (and remove the named volume):
+
+```bash
+docker compose down -v
+```
+
+<Warning>
+  The Compose example above uses plain-text passwords for convenience. In
+  production, use Docker secrets or a `.env` file excluded from version control
+  to keep credentials out of `docker-compose.yml`.
+</Warning>
+
+---
+
+## Health check
+
+Port **8080** is the single exposed port for both the REST API and the
+WebSocket endpoint. Use any of the following methods to confirm the application
+is alive after startup:
+
+```bash
+# Simple TCP connectivity check
+curl -sf http://localhost:8080/actuator/health || echo "not ready"
+
+# Or check the HTTP response code of any public endpoint
+curl -o /dev/null -w "%{http_code}" http://localhost:8080
+```
+
+If the container exits immediately, inspect the logs for missing environment
+variables or a failed database connection:
+
+```bash
+docker logs <container_id> 2>&1 | tail -40
+```
+
+Common causes of startup failure:
+
+- `DATA_BASE_URL` unreachable from inside the container (check network / firewall rules)
+- Wrong `DATA_BASE_USERNAME` / `DATA_BASE_PASSWORD`
+- `SUPABASE_URL` or `SERVICE_KEY` not set — the Spring context fails to start because `@Value` injection throws

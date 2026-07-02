@@ -1,0 +1,289 @@
+---
+title: "Authenticate Requests to CalenderyBack"
+sidebarTitle: "Authentication"
+description: "CalenderyBack uses HTTP Basic authentication backed by Spring Security. Learn how to register, verify your account, obtain credentials, and protect requests."
+---
+
+## Overview
+
+CalenderyBack relies on **HTTP Basic authentication** provided by Spring Security. There are no session cookies, no JWT tokens, and no OAuth flows — every request to a protected route must include an `Authorization` header with the user's email and password encoded in Base64.
+
+```
+Authorization: Basic <base64(email:password)>
+```
+
+Most HTTP clients (curl, Axios, fetch, Retrofit, etc.) have built-in helpers for Basic auth, so you rarely need to encode the header manually.
+
+---
+
+## Registration Flow
+
+New accounts go through a two-step **register → verify** flow before they can authenticate.
+
+```
+Client                              Server                        Email
+  │                                    │                            │
+  │── POST /api/users/auth/register ──▶│                            │
+  │                                    │── sends verification ────▶│
+  │◀── 200 { idUsuario, roles } ───────│        email               │
+  │                                    │                            │
+  │   (user clicks link in email)      │                            │
+  │                                    │                            │
+  │── GET /api/users/registrationConfirm?token=... ───────────────▶│
+  │◀── 200 OK (account now enabled) ───│                            │
+```
+
+### Step 1 — Register
+
+`POST /api/users/auth/register` is **public** (no credentials needed).
+
+Request body (`UserDto`):
+
+| Field        | Type   | Required | Notes                              |
+|--------------|--------|----------|------------------------------------|
+| `nombre`     | string | ✅       | Display name (`@NotBlank`)         |
+| `email`      | string | ✅       | Must pass `@ValidEmail` check      |
+| `keypass`    | string | ✅       | Plain-text password (hashed with BCrypt at rest) |
+| `descripcion`| string | —        | Bio, max 200 characters            |
+
+```bash
+curl -i -X POST http://localhost:8080/api/users/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre":  "Alice Example",
+    "email":   "alice@example.com",
+    "keypass": "s3cr3tP@ss!"
+  }'
+```
+
+Response `200 OK` — `UserInfoResponseDto`:
+
+```json
+{
+  "idUsuario": 1,
+  "roles": ["ROLE_USER"]
+}
+```
+
+A verification email is sent immediately after the record is persisted. The account is **disabled** until the token is confirmed.
+
+### Step 2 — Confirm Email Token
+
+```bash
+curl -i "http://localhost:8080/api/users/registrationConfirm?token=<TOKEN_FROM_EMAIL>"
+```
+
+Response `200 OK` (empty body). The `enable` flag on the user entity is set to `true` — the account is now active.
+
+<Warning>
+  Any attempt to authenticate (login, or any protected endpoint) with an account whose `enable` flag is `false` will return **HTTP 401 Unauthorized**. Always complete the email confirmation step before trying to call protected routes.
+</Warning>
+
+---
+
+## Login
+
+`POST /api/users/auth/login` validates credentials and returns the user's identity information. Pass the credentials as an HTTP Basic header.
+
+```bash
+curl -i -X POST http://localhost:8080/api/users/auth/login \
+  -u "alice@example.com:s3cr3tP@ss!"
+```
+
+Response `200 OK` — `UserInfoResponseDto`:
+
+```json
+{
+  "idUsuario": 1,
+  "roles": ["ROLE_USER"]
+}
+```
+
+The `idUsuario` value is important: several protected endpoints accept it as a query parameter and use `@PreAuthorize` to check that the authenticated principal matches.
+
+---
+
+## Account Validation
+
+Use `GET /api/users/auth/validateUser` to check whether an email address exists in the system and whether its account is enabled — useful for "forgot password" or pre-login checks.
+
+```bash
+curl -i "http://localhost:8080/api/users/auth/validateUser?email=alice@example.com"
+```
+
+Response `200 OK` — `UserValidationDto`:
+
+```json
+{
+  "userInfo": {
+    "idUsuario": 1,
+    "roles": ["ROLE_USER"]
+  },
+  "enable": true
+}
+```
+
+| Field      | Type    | Description                                        |
+|------------|---------|----------------------------------------------------|
+| `userInfo` | object  | `idUsuario` and `roles` for the matched account    |
+| `enable`   | boolean | `true` if the account has been email-verified      |
+
+---
+
+## Resend Verification Token
+
+If the original verification email was lost or expired, a new token can be requested:
+
+```bash
+curl -i "http://localhost:8080/api/users/auth/resendRegistrationToken?idUsuario=1"
+```
+
+Response `204 No Content`. A fresh verification email is dispatched to the address on file.
+
+---
+
+## Public vs Protected Routes
+
+The route protection rules are defined in `SecurityConfig` and applied globally:
+
+| Path pattern                              | Access level               | Notes                                      |
+|-------------------------------------------|----------------------------|--------------------------------------------|
+| `POST /api/users/auth/register`           | **Public**                 | Creates a new, unverified account          |
+| `GET  /api/users/registrationConfirm`     | **Public**                 | Activates account via email token          |
+| `GET  /api/users/auth/resendRegistrationToken` | **Public**            | Re-sends the verification email           |
+| `GET  /api/users/auth/validateUser`       | **Public**                 | Checks if an email/account exists          |
+| `POST /api/users/auth/login`              | Authenticated              | HTTP Basic; any valid enabled account      |
+| `/api/users/app/**`                       | `ROLE_USER` required       | All user profile / settings endpoints     |
+| `/api/publication/app/**`                 | `ROLE_USER` required       | Publication feed endpoints                 |
+| `/api/chat/**`                            | `ROLE_USER` required       | Chat room endpoints                        |
+| `/ws-endpoint/**`                         | `ROLE_USER` required       | STOMP WebSocket connection                 |
+| `OPTIONS /**`                             | **Public**                 | CORS preflight pass-through                |
+| All other paths                           | Any authenticated user     | Fallback rule                              |
+
+---
+
+## Ownership Guards (`@PreAuthorize`)
+
+Several endpoints carry an additional method-level `@PreAuthorize` annotation that ensures the **authenticated user can only access their own resources**:
+
+```java
+@GetMapping("/app/getUserSettings")
+@PreAuthorize("#id == authentication.principal.idUsuario")
+public ResponseEntity<UserSettingsResponseDto> getUserSettingsInfo(
+    @RequestParam("idUsuario") Long id) { ... }
+```
+
+<Tip>
+  Any endpoint annotated with `@PreAuthorize("#id == authentication.principal.idUsuario")` (or the equivalent `#userId` variant) will return **HTTP 403 Forbidden** if the `idUsuario` request parameter does not match the `idUsuario` of the currently authenticated principal. Always use the `idUsuario` returned by `/auth/login` when calling these endpoints.
+</Tip>
+
+Endpoints with ownership guards include:
+
+| Endpoint                                          | Guard parameter   |
+|---------------------------------------------------|-------------------|
+| `GET  /api/users/app/getUserSettings`             | `idUsuario`       |
+| `PUT  /api/users/app/updateUserSetting`           | `idUsuario`       |
+| `PUT  /api/users/app/publicKey`                   | `userId`          |
+| `GET  /api/users/app/checkPublicKey`              | `idUsuario`       |
+| `GET  /api/users/activeAccountConfirmation`       | `idUsuario`       |
+
+---
+
+## Public-Key Exchange (End-to-End Encryption)
+
+CalenderyBack exposes three endpoints for managing per-user public keys, enabling clients to implement end-to-end encrypted messaging:
+
+### Upload / update your public key
+
+```
+PUT /api/users/app/publicKey?userId={id}
+```
+
+Requires `ROLE_USER` **and** the `userId` must match the authenticated principal.
+
+```bash
+curl -i -X PUT \
+  -u "alice@example.com:s3cr3tP@ss!" \
+  "http://localhost:8080/api/users/app/publicKey?userId=1" \
+  -H "Content-Type: application/json" \
+  -d '{"publicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjAN..."}'
+```
+
+Response `200 OK` (empty body).
+
+### Retrieve another user's public key
+
+```
+GET /api/users/app/getPublicKey?idUsuario={id}
+```
+
+Requires `ROLE_USER`. Any authenticated user may retrieve any other user's public key (it is public by design).
+
+```bash
+curl -i \
+  -u "alice@example.com:s3cr3tP@ss!" \
+  "http://localhost:8080/api/users/app/getPublicKey?idUsuario=2"
+```
+
+Response `200 OK`:
+
+```json
+{
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjAN..."
+}
+```
+
+### Verify your own stored public key
+
+```
+GET /api/users/app/checkPublicKey?idUsuario={id}&clavePublica={key}
+```
+
+Requires `ROLE_USER` **and** ownership guard on `idUsuario`. Returns `200 OK` if the supplied key matches the stored value, otherwise throws an application-level error.
+
+```bash
+curl -i \
+  -u "alice@example.com:s3cr3tP@ss!" \
+  "http://localhost:8080/api/users/app/checkPublicKey?idUsuario=1&clavePublica=<YOUR_PUBLIC_KEY>"
+```
+
+---
+
+## Password Security
+
+Passwords are stored using **BCrypt** (via Spring Security's `BCryptPasswordEncoder`). Plain-text passwords are never persisted:
+
+```java
+@Bean
+public PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+}
+```
+
+The `UserDetailsService` implementation (`MyUserDetailsService`) loads users by email and delegates password comparison to the encoder automatically during Basic auth processing.
+
+---
+
+## Making Authenticated Requests — Quick Reference
+
+```bash
+# Generic pattern — replace <email>, <password>, and <endpoint>
+curl -u "<email>:<password>" http://localhost:8080<endpoint>
+
+# Explicit Base64 header (equivalent)
+CREDENTIALS=$(echo -n "alice@example.com:s3cr3tP@ss!" | base64)
+curl -H "Authorization: Basic $CREDENTIALS" http://localhost:8080/api/users/app/getUserSettings?idUsuario=1
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Step-by-step guide to running the server locally and making your first API call.
+  </Card>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Architecture overview, functional domains, and the Mediator pattern.
+  </Card>
+</CardGroup>

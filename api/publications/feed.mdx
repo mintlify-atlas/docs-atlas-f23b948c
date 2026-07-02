@@ -1,0 +1,192 @@
+---
+title: "Fetch Publication Feeds — Home and Profile Timelines"
+sidebarTitle: "Feed"
+description: "Retrieve a paginated home feed of publications from followed users, or filter a user's calendar posts by month and year using the CalenderyBack publications feed endpoints."
+---
+
+## GET /api/publication/app/getHomePublications
+
+Returns a paginated feed of publications authored by users that the authenticated user follows. Results are ordered according to the `Pageable` parameters you supply.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+### Query Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `page` | `int` | Zero-based page index (default `0`) |
+| `size` | `int` | Number of items per page (default `20`) |
+| `sort` | `string` | Sort expression, e.g. `publicationDate.uploadDate,desc` |
+
+### Response — `Page<PublicationHomeDto>`
+
+Each item in the page content array has the following shape:
+
+| Field | Type | Description |
+|---|---|---|
+| `publicationData` | `PublicationProfileDto` | Core publication data (see fields below) |
+| `idUsuario` | `Long` | ID of the publication author |
+| `fotoPerfil` | `String` | Profile picture URL of the author |
+| `nombrePerfil` | `String` | Display name of the author |
+
+`PublicationProfileDto` fields nested inside `publicationData`:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `Long` | Publication ID |
+| `fotoPublicacion` | `String` | Supabase signed URL for the media file |
+| `mensaje` | `String` | Text caption of the post |
+| `cantidadLikes` | `int` | Total like count |
+| `cantidadComentarios` | `int` | Total comment count |
+| `fechaCalendario` | `LocalDate` | Calendar date assigned to the post (`YYYY-MM-DD`) |
+| `fechaPublicacion` | `LocalDateTime` | Wall-clock timestamp when the post was uploaded |
+| `like` | `boolean` | `true` if the authenticated user has liked this publication |
+
+### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/publication/app/getHomePublications?page=0&size=10&sort=publicationDate.uploadDate,desc" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /api/publication/app/getProfilePosts
+
+Returns a paginated list of publications for a specific user, filtered by a calendar **month** and **year**. Use this endpoint to power a user's profile calendar view.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idUsuario` | `Long` | ✅ | ID of the user whose posts to retrieve |
+| `month` | `int` | ✅ | Calendar month to filter by (`1` – `12`) |
+| `year` | `int` | ✅ | Calendar year to filter by (e.g. `2024`) |
+| `page` | `int` | — | Zero-based page index (default `0`) |
+| `size` | `int` | — | Items per page (default `20`) |
+| `sort` | `string` | — | Sort expression |
+
+### Response — `Page<PublicationProfileDto>`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `Long` | Publication ID |
+| `fotoPublicacion` | `String` | Supabase signed URL for the media file |
+| `mensaje` | `String` | Text caption of the post |
+| `cantidadLikes` | `int` | Total like count |
+| `cantidadComentarios` | `int` | Total comment count |
+| `fechaCalendario` | `LocalDate` | Calendar date assigned to the post (`YYYY-MM-DD`) |
+| `fechaPublicacion` | `LocalDateTime` | Wall-clock timestamp when the post was uploaded |
+| `like` | `boolean` | `true` if the authenticated user has liked this publication |
+
+### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/publication/app/getProfilePosts?idUsuario=7&month=8&year=2024&page=0&size=20" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /api/publication/app/getPostUrl
+
+Creates a placeholder `Publication` record in the database and returns a short-lived Supabase Storage signed upload URL. This is **step 1** of the two-step post creation flow — see the [Overview](/api/publications/overview) for the full walkthrough.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+### Response — `SignedUrlPostDto`
+
+| Field | Type | Description |
+|---|---|---|
+| `idPost` | `Long` | ID of the placeholder publication created by this call; pass it to `putPublicationData` |
+| `url` | `String` | Short-lived Supabase Storage signed upload URL; upload the media file directly to this URL |
+
+### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/publication/app/getPostUrl" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "idPost": 42,
+  "url": "https://<project>.supabase.co/storage/v1/object/sign/publications/uuid.jpg?token=..."
+}
+```
+
+---
+
+## PUT /api/publication/app/putPublicationData
+
+Finalises a placeholder publication by attaching its text message, owner, and calendar date. This is **step 3** of the two-step post creation flow and must be called after the media file has been uploaded directly to Supabase Storage.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+### Request Body — `PostDataDto`
+
+```json
+{
+  "idPost": 42,
+  "message": "Beautiful sunset hike 🌄",
+  "idUsuario": 7,
+  "calendarDate": "2024-08-15"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `idPost` | `Long` | ✅ | ID of the placeholder publication returned by `getPostUrl` |
+| `message` | `String` | ✅ | Text caption to attach to the publication |
+| `idUsuario` | `Long` | ✅ | ID of the user who owns the publication |
+| `calendarDate` | `LocalDate` | ✅ | Calendar date to associate with the post (`YYYY-MM-DD`) |
+
+### Response
+
+`200 OK` — empty body.
+
+### Example
+
+```bash
+curl -X PUT \
+  "https://api.example.com/api/publication/app/putPublicationData" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idPost": 42,
+    "message": "Beautiful sunset hike 🌄",
+    "idUsuario": 7,
+    "calendarDate": "2024-08-15"
+  }'
+```
+
+---
+
+## DELETE /api/publication/app/deletePublication
+
+Permanently deletes a publication. The authenticated user must be the **owner** of the publication — the handler enforces ownership before deletion.
+
+**Auth:** `ROLE_USER` (JWT Bearer token required)
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `idPublicacion` | `Long` | ✅ | ID of the publication to delete |
+
+### Response
+
+`200 OK` — empty body.
+
+### Example
+
+```bash
+curl -X DELETE \
+  "https://api.example.com/api/publication/app/deletePublication?idPublicacion=42" \
+  -H "Authorization: Bearer <token>"
+```

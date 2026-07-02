@@ -1,0 +1,184 @@
+---
+title: "Chat REST Endpoints — Create and Retrieve Conversations"
+sidebarTitle: "Chats"
+description: "Create new chats between users, retrieve a chat by ID, list all chats for a user, and look up the shared chat ID between two users using the CalenderyBack chat API."
+---
+
+## Overview
+
+The chat API manages **conversation threads** between pairs of users. Every direct message exchange lives inside a `Chat` record that links exactly two users. All endpoints below require a valid authenticated session with **ROLE\_USER**.
+
+### Chat domain entity
+
+| Field   | Type   | Description                               |
+| ------- | ------ | ----------------------------------------- |
+| `id`    | `Long` | Unique identifier for the conversation    |
+| `user1` | `User` | First participant (full `User` object)    |
+| `user2` | `User` | Second participant (full `User` object)   |
+
+---
+
+## Endpoints
+
+### POST /api/chat/saveChat
+
+Creates a new conversation between two users. Returns the ID of the newly persisted chat record.
+
+**Authentication:** ROLE\_USER
+
+**Request body — `ChatDto`**
+
+| Field   | Type   | Required | Description                   |
+| ------- | ------ | -------- | ----------------------------- |
+| `user1` | `Long` | ✅        | ID of the first participant   |
+| `user2` | `Long` | ✅        | ID of the second participant  |
+
+**Response `200 OK` — `ChatId`**
+
+| Field    | Type   | Description                     |
+| -------- | ------ | ------------------------------- |
+| `idChat` | `Long` | ID of the newly created chat    |
+
+<Tip>
+Before calling `saveChat`, always call `getUserChat` first to check whether a conversation between the two users already exists. Creating a duplicate chat will result in a second thread being opened between the same pair of users.
+</Tip>
+
+```bash
+curl -X POST "http://localhost:8080/api/chat/saveChat" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user1": 1,
+    "user2": 2
+  }'
+```
+
+**Example response**
+
+```json
+{
+  "idChat": 42
+}
+```
+
+---
+
+### GET /api/chat/getChat
+
+Retrieves a single chat record by its ID.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter | Type   | Required | Description           |
+| --------- | ------ | -------- | --------------------- |
+| `idChat`  | `Long` | ✅        | The chat ID to fetch  |
+
+**Response `200 OK` — `ChatDto`**
+
+| Field   | Type   | Description                          |
+| ------- | ------ | ------------------------------------ |
+| `id`    | `Long` | Unique identifier of the chat        |
+| `user1` | `Long` | ID of the first participant          |
+| `user2` | `Long` | ID of the second participant         |
+
+```bash
+curl -X GET "http://localhost:8080/api/chat/getChat?idChat=42" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+**Example response**
+
+```json
+{
+  "id": 42,
+  "user1": 1,
+  "user2": 2
+}
+```
+
+---
+
+### GET /api/chat/getUserChats
+
+Returns all chats in which the specified user is a participant (either as `user1` or `user2`).
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter   | Type   | Required | Description                             |
+| ----------- | ------ | -------- | --------------------------------------- |
+| `idUsuario` | `Long` | ✅        | The user whose conversation list to fetch |
+
+**Response `200 OK` — `List<ChatDto>`**
+
+An array of `ChatDto` objects (same shape as `/getChat`).
+
+```bash
+curl -X GET "http://localhost:8080/api/chat/getUserChats?idUsuario=1" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+**Example response**
+
+```json
+[
+  {
+    "id": 42,
+    "user1": 1,
+    "user2": 2
+  },
+  {
+    "id": 57,
+    "user1": 1,
+    "user2": 9
+  }
+]
+```
+
+---
+
+### GET /api/chat/getUserChat
+
+Resolves the shared chat ID between the **authenticated user** and another user identified by `idUsuario`. The server derives the authenticated user's ID from the current `Authentication` principal (their email), then looks up the matching `Chat` row.
+
+This endpoint is the canonical way to open a direct message thread: resolve the chat ID, then subscribe to the WebSocket queue or load message history via REST.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter   | Type   | Required | Description                          |
+| ----------- | ------ | -------- | ------------------------------------ |
+| `idUsuario` | `Long` | ✅        | ID of the other user in the conversation |
+
+**Response `200 OK` — `ChatId`**
+
+| Field    | Type   | Description                            |
+| -------- | ------ | -------------------------------------- |
+| `idChat` | `Long` | ID of the chat shared by the two users |
+
+```bash
+curl -X GET "http://localhost:8080/api/chat/getUserChat?idUsuario=2" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+**Example response**
+
+```json
+{
+  "idChat": 42
+}
+```
+
+---
+
+## The `checkIfChatExists` query
+
+Internally, CalenderyBack exposes a `CheckIfChatExistsHandler` that accepts a user email and a target user ID, and returns a simple boolean. This logic is also used by the user profile flow to tell the client whether it should show an **"Open Chat"** or a **"Start Chat"** action when viewing another user's profile. It queries the chat repository on both the `(user1, user2)` and `(user2, user1)` axis so the result is direction-agnostic.
+
+<Note>
+`getUserChat` relies on the same underlying repository method as `checkIfChatExists`. If no chat row is found, the handler throws a domain exception — always verify the chat exists before trying to resolve its ID.
+</Note>

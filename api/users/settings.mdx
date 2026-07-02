@@ -1,0 +1,322 @@
+---
+title: "User Settings and Contacts Endpoints"
+sidebarTitle: "Settings"
+description: "Fetch and update user account settings, retrieve paginated chat contacts, and search users by name using the CalenderyBack user settings endpoints."
+---
+
+These endpoints let authenticated users manage their own account settings, and help the app populate contact lists and user-search results with paginated, name-filtered data.
+
+---
+
+## Get user settings
+
+<api-endpoint method="GET" path="/api/users/app/getUserSettings" />
+
+Returns the editable account settings for the authenticated user — including a signed Supabase URL for their current profile photo. Requires `ROLE_USER` and ownership (`#idUsuario == authentication.principal.idUsuario`).
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user whose settings to fetch. Must match the authenticated principal.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="nombre" type="string">
+  The user's current display name (not blank).
+</ResponseField>
+
+<ResponseField name="fotoPerfil" type="string">
+  A signed Supabase Storage URL for the current profile photo.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  The user's bio / description.
+</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getUserSettings?idUsuario=42" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "nombre": "Alice",
+  "fotoPerfil": "https://<project>.supabase.co/storage/v1/object/sign/Avatares/42?token=...",
+  "descripcion": "Hello, I am Alice!"
+}
+```
+
+---
+
+## Update user settings
+
+<api-endpoint method="PUT" path="/api/users/app/updateUserSetting" />
+
+Persists new values for the user's editable settings fields. Requires `ROLE_USER` and ownership (`#idUsuario == authentication.principal.idUsuario`).
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user to update. Must match the authenticated principal.
+</ParamField>
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  Updated display name. Must not be blank.
+</ParamField>
+
+<ParamField body="fotoPerfil" type="string">
+  Updated profile photo URL.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated bio / description.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | Settings saved. Empty body. |
+| `403 Forbidden` | `idUsuario` does not match the authenticated user. |
+
+```bash
+curl -X PUT "https://api.example.com/api/users/app/updateUserSetting?idUsuario=42" \
+  -u "alice@example.com:s3cr3tP@ss" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Alice Updated",
+    "descripcion": "New bio here."
+  }'
+```
+
+---
+
+## List all users
+
+<api-endpoint method="GET" path="/api/users" />
+
+Returns an array of all `UserDto` records in the system. Requires an authenticated session.
+
+### Response `200 OK`
+
+An array of `UserDto` objects.
+
+<ResponseField name="[].idUsuario" type="number">Numeric user ID.</ResponseField>
+<ResponseField name="[].nombre" type="string">Display name.</ResponseField>
+<ResponseField name="[].email" type="string">Email address.</ResponseField>
+<ResponseField name="[].descripcion" type="string">Bio / description.</ResponseField>
+<ResponseField name="[].keypass" type="string">Hashed password.</ResponseField>
+<ResponseField name="[].fotoPerfil" type="string">Profile photo URL.</ResponseField>
+<ResponseField name="[].clavePublica" type="string">E2E encryption public key.</ResponseField>
+<ResponseField name="[].cantidadSeguidores" type="number">Follower count.</ResponseField>
+<ResponseField name="[].cantidadSeguidos" type="number">Following count.</ResponseField>
+<ResponseField name="[].enable" type="boolean">Whether the account is activated.</ResponseField>
+<ResponseField name="[].roles" type="object[]">List of assigned `Rol` objects.</ResponseField>
+
+```bash
+curl https://api.example.com/api/users \
+  -H "Authorization: Basic <base64(email:password)>"
+```
+
+---
+
+## Update a user
+
+<api-endpoint method="PUT" path="/api/users" />
+
+Replaces a user record with the provided `UserDto`. Requires an authenticated session.
+
+### Request body
+
+Full `UserDto` object (see fields in [List all users](#list-all-users)).
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | User updated. Empty body. |
+
+```bash
+curl -X PUT https://api.example.com/api/users \
+  -H "Authorization: Basic <base64(email:password)>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idUsuario": 42,
+    "nombre": "Alice",
+    "email": "alice@example.com",
+    "keypass": "hashed-password",
+    "descripcion": "Updated bio.",
+    "fotoPerfil": "https://..."
+  }'
+```
+
+---
+
+## Delete a user by ID
+
+<api-endpoint method="DELETE" path="/api/users/{id}" />
+
+Permanently deletes a single user record. Requires an authenticated session.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the user to delete.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | User deleted. Empty body. |
+
+```bash
+curl -X DELETE https://api.example.com/api/users/42 \
+  -H "Authorization: Basic <base64(email:password)>"
+```
+
+---
+
+## Delete all users
+
+<api-endpoint method="DELETE" path="/api/users/all" />
+
+Permanently deletes **every** user record in the system. Use with caution. Requires an authenticated session.
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | All users deleted. Empty body. |
+
+```bash
+curl -X DELETE https://api.example.com/api/users/all \
+  -H "Authorization: Basic <base64(email:password)>"
+```
+
+---
+
+## Get paginated chat contacts
+
+<api-endpoint method="GET" path="/api/users/app/getUserContacts" />
+
+Returns a paginated list of the caller's existing chat contacts, optionally filtered by display name. Each result includes the last message exchanged in the shared chat and a flag indicating unread messages. Requires `ROLE_USER`.
+
+### Query parameters
+
+<ParamField query="nombre" type="string" required>
+  Name fragment to filter contacts. Pass an empty string to return all contacts.
+</ParamField>
+
+<ParamField query="page" type="number">
+  Zero-based page number (default `0`).
+</ParamField>
+
+<ParamField query="size" type="number">
+  Number of items per page (default `10`).
+</ParamField>
+
+<ParamField query="sort" type="string">
+  Sort expression, e.g. `nombre,asc`.
+</ParamField>
+
+### Response `200 OK`
+
+A Spring `Page` envelope containing `UserChatDataDto` items.
+
+<ResponseField name="content[].idUsuario" type="number">Contact's numeric user ID.</ResponseField>
+<ResponseField name="content[].nombre" type="string">Contact's display name.</ResponseField>
+<ResponseField name="content[].fotoPerfil" type="string">Contact's profile photo URL.</ResponseField>
+<ResponseField name="content[].idChat" type="number">ID of the shared chat session.</ResponseField>
+<ResponseField name="content[].ultimoMensaje" type="string">Text of the last message in the chat.</ResponseField>
+<ResponseField name="content[].mensajeNuevo" type="boolean">`true` if there are unread messages from this contact.</ResponseField>
+<ResponseField name="totalElements" type="number">Total contacts matching the filter.</ResponseField>
+<ResponseField name="totalPages" type="number">Total number of pages.</ResponseField>
+<ResponseField name="number" type="number">Current page number (zero-based).</ResponseField>
+<ResponseField name="size" type="number">Page size used for this response.</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getUserContacts?nombre=bob&page=0&size=10" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "content": [
+    {
+      "idUsuario": 7,
+      "nombre": "Bob",
+      "fotoPerfil": "https://...",
+      "idChat": 101,
+      "ultimoMensaje": "See you tomorrow!",
+      "mensajeNuevo": true
+    }
+  ],
+  "totalElements": 1,
+  "totalPages": 1,
+  "number": 0,
+  "size": 10
+}
+```
+
+---
+
+## Search users by name
+
+<api-endpoint method="GET" path="/api/users/app/getSearchUsers" />
+
+Returns a paginated list of users whose display name matches the given fragment, excluding the calling user. Designed for the "Find people" search UI. Requires `ROLE_USER`.
+
+### Query parameters
+
+<ParamField query="nombre" type="string" required>
+  Name fragment to search for.
+</ParamField>
+
+<ParamField query="page" type="number">
+  Zero-based page number (default `0`).
+</ParamField>
+
+<ParamField query="size" type="number">
+  Number of items per page (default `10`).
+</ParamField>
+
+<ParamField query="sort" type="string">
+  Sort expression, e.g. `nombre,asc`.
+</ParamField>
+
+### Response `200 OK`
+
+A Spring `Page` envelope containing `UserReducedData` items.
+
+<ResponseField name="content[].idUsuario" type="number">Numeric user ID.</ResponseField>
+<ResponseField name="content[].nombre" type="string">Display name.</ResponseField>
+<ResponseField name="content[].fotoPerfil" type="string">Profile photo URL.</ResponseField>
+<ResponseField name="totalElements" type="number">Total users matching the search.</ResponseField>
+<ResponseField name="totalPages" type="number">Total number of pages.</ResponseField>
+<ResponseField name="number" type="number">Current page number (zero-based).</ResponseField>
+<ResponseField name="size" type="number">Page size used for this response.</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getSearchUsers?nombre=ali&page=0&size=10" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "content": [
+    {
+      "idUsuario": 99,
+      "nombre": "Alicia",
+      "fotoPerfil": "https://..."
+    }
+  ],
+  "totalElements": 1,
+  "totalPages": 1,
+  "number": 0,
+  "size": 10
+}
+```

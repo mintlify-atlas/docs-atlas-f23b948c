@@ -1,0 +1,270 @@
+---
+title: "User Profile and Public Key REST Endpoints"
+sidebarTitle: "Profile"
+description: "Retrieve full user profiles with follow status, fetch comment author data, upload profile photos via Supabase signed URLs, and manage E2E encryption public keys."
+---
+
+These endpoints serve the authenticated app experience: fetching full or reduced user profiles, uploading avatar photos through Supabase Storage, retrieving the minimal data needed when posting comments, and reading or writing end-to-end encryption public keys.
+
+---
+
+## Get user by ID
+
+<api-endpoint method="GET" path="/api/users/{id}" />
+
+Returns the complete `UserDto` for a user by their numeric ID. Requires an authenticated session.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric user ID.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="idUsuario" type="number">Numeric user ID.</ResponseField>
+<ResponseField name="nombre" type="string">Display name.</ResponseField>
+<ResponseField name="email" type="string">Email address.</ResponseField>
+<ResponseField name="descripcion" type="string">Short bio (max 200 characters).</ResponseField>
+<ResponseField name="keypass" type="string">Hashed password / passphrase.</ResponseField>
+<ResponseField name="fotoPerfil" type="string">Profile photo URL.</ResponseField>
+<ResponseField name="clavePublica" type="string">E2E encryption public key.</ResponseField>
+<ResponseField name="cantidadSeguidores" type="number">Follower count.</ResponseField>
+<ResponseField name="cantidadSeguidos" type="number">Following count.</ResponseField>
+<ResponseField name="enable" type="boolean">Whether the account is activated.</ResponseField>
+<ResponseField name="roles" type="object[]">List of assigned `Rol` objects.</ResponseField>
+
+```bash
+curl https://api.example.com/api/users/42 \
+  -H "Authorization: Basic <base64(email:password)>"
+```
+
+---
+
+## Get user by email
+
+<api-endpoint method="GET" path="/api/users/email/{email}" />
+
+Returns the complete `UserDto` for a user identified by their email address. Requires an authenticated session.
+
+### Path parameters
+
+<ParamField path="email" type="string" required>
+  The user's email address.
+</ParamField>
+
+### Response `200 OK`
+
+Same fields as [Get user by ID](#get-user-by-id).
+
+```bash
+curl https://api.example.com/api/users/email/alice@example.com \
+  -H "Authorization: Basic <base64(email:password)>"
+```
+
+---
+
+## Get user profile
+
+<api-endpoint method="GET" path="/api/users/app/getUserProfile" />
+
+Returns a public-facing profile for the given user, including follower and following counts, whether the calling user follows them, and whether a chat already exists between the two. Requires `ROLE_USER`.
+
+Internally this endpoint dispatches:
+- `GetUserProfileByIdRequest` — fetches core profile data.
+- `isFollowingRequest` — checks whether the caller follows `idUsuario`.
+- `CheckIfChatExistsRequest` — checks whether a direct chat exists between the caller and `idUsuario`.
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user whose profile to fetch.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="nombre" type="string">Display name.</ResponseField>
+<ResponseField name="fotoPerfil" type="string">Profile photo URL (signed Supabase URL).</ResponseField>
+<ResponseField name="descripcion" type="string">Bio or description.</ResponseField>
+<ResponseField name="cantidadSeguidores" type="number">Total number of followers.</ResponseField>
+<ResponseField name="cantidadSeguidos" type="number">Total number of accounts followed.</ResponseField>
+<ResponseField name="seguidor" type="boolean">`true` if the authenticated caller is following this user.</ResponseField>
+<ResponseField name="existeChat" type="boolean">`true` if a direct chat already exists between caller and this user.</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getUserProfile?idUsuario=42" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "nombre": "Bob",
+  "fotoPerfil": "https://supabase.example.com/storage/v1/object/sign/Avatares/42?token=...",
+  "descripcion": "Hey there!",
+  "cantidadSeguidores": 120,
+  "cantidadSeguidos": 85,
+  "seguidor": true,
+  "existeChat": false
+}
+```
+
+---
+
+## Get upload profile-photo signed URL
+
+<api-endpoint method="GET" path="/api/users/app/getUploadProfileSignedUrl" />
+
+Generates a short-lived Supabase Storage signed URL that allows the client to `PUT` a new profile photo directly into the `Avatares` bucket. Requires `ROLE_USER`.
+
+The server:
+1. Resolves the calling user's ID from the `Authentication` principal.
+2. Constructs a `SupabaseStorageUploadUrlRequest` for the `Avatares` bucket keyed by the user's ID.
+3. Returns the pre-signed upload URL.
+
+After receiving the URL, the client should `PUT` the image binary directly to that URL — no additional CalenderyBack authentication is needed for the upload itself.
+
+### Response `200 OK`
+
+<ResponseField name="url" type="string">
+  Supabase Storage signed upload URL. Valid for a short window; use it immediately.
+</ResponseField>
+
+```bash
+# Step 1 — obtain the signed URL
+curl "https://api.example.com/api/users/app/getUploadProfileSignedUrl" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "url": "https://<project>.supabase.co/storage/v1/object/Avatares/42?token=<signed-token>"
+}
+```
+
+```bash
+# Step 2 — upload the photo directly to Supabase
+curl -X PUT "<signed-url-from-step-1>" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @avatar.jpg
+```
+
+---
+
+## Get comment author data
+
+<api-endpoint method="GET" path="/api/users/app/getUserCommentData" />
+
+Returns the minimal information needed to attribute a comment to the calling user: their profile photo URL and display name. Requires `ROLE_USER`.
+
+### Response `200 OK`
+
+<ResponseField name="fotoPerfil" type="string">Profile photo URL of the authenticated user.</ResponseField>
+<ResponseField name="nombreUsuario" type="string">Display name of the authenticated user.</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getUserCommentData" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "fotoPerfil": "https://supabase.example.com/storage/v1/object/sign/Avatares/42?token=...",
+  "nombreUsuario": "Alice"
+}
+```
+
+---
+
+## Get a user's public key
+
+<api-endpoint method="GET" path="/api/users/app/getPublicKey" />
+
+Retrieves the E2E encryption public key stored for any user. Requires `ROLE_USER`. Typically called before initiating an encrypted message exchange.
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user whose public key to retrieve.
+</ParamField>
+
+### Response `200 OK`
+
+<ResponseField name="publicKey" type="string">
+  The user's E2E encryption public key as a string.
+</ResponseField>
+
+```bash
+curl "https://api.example.com/api/users/app/getPublicKey?idUsuario=42" \
+  -u "alice@example.com:s3cr3tP@ss"
+```
+
+```json Response
+{
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
+}
+```
+
+---
+
+## Update the caller's public key
+
+<api-endpoint method="PUT" path="/api/users/app/publicKey" />
+
+Saves or replaces the E2E encryption public key for the authenticated user. Requires `ROLE_USER` and ownership (`#userId == authentication.principal.idUsuario`).
+
+### Query parameters
+
+<ParamField query="userId" type="number" required>
+  Numeric ID of the user whose public key to update. Must match the authenticated principal.
+</ParamField>
+
+### Request body
+
+<ParamField body="publicKey" type="string" required>
+  The new public key string to store.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Public key saved. Empty body. |
+| `403 Forbidden` | `userId` does not match the authenticated user. |
+
+```bash
+curl -X PUT "https://api.example.com/api/users/app/publicKey?userId=42" \
+  -u "alice@example.com:s3cr3tP@ss" \
+  -H "Content-Type: application/json" \
+  -d '{ "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." }'
+```
+
+---
+
+## Check a user's public key
+
+<api-endpoint method="GET" path="/api/users/app/checkPublicKey" />
+
+Verifies that the provided public key string matches the one stored for the given user. Requires `ROLE_USER` and ownership (`#userId == authentication.principal.idUsuario`). Useful to detect key rotation or tampering before decrypting received messages.
+
+### Query parameters
+
+<ParamField query="idUsuario" type="number" required>
+  Numeric ID of the user. Must match the authenticated principal.
+</ParamField>
+
+<ParamField query="clavePublica" type="string" required>
+  The public key value to compare against the stored key.
+</ParamField>
+
+### Response
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Keys match. Empty body. |
+| `403 Forbidden` | `idUsuario` does not match the authenticated user. |
+| `4xx` | Keys do not match or user not found. |
+
+```bash
+curl "https://api.example.com/api/users/app/checkPublicKey?idUsuario=42&clavePublica=MIIBIjAN..." \
+  -u "alice@example.com:s3cr3tP@ss"
+```

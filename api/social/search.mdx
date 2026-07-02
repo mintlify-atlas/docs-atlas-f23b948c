@@ -1,0 +1,166 @@
+---
+title: "Search Users and Discover Contacts"
+sidebarTitle: "Search"
+description: "Search the CalenderyBack user directory by name and retrieve chat contacts with last-message previews using two paginated ROLE_USER-protected endpoints."
+---
+
+## Overview
+
+CalenderyBack exposes two distinct discovery endpoints for finding other users:
+
+- **Search** (`getSearchUsers`) — queries the entire user directory by name, excluding the currently authenticated user. Use this for a global user-discovery screen.
+- **Contacts** (`getUserContacts`) — filters only the users with whom the authenticated user already has an active chat, enriching each result with last-message preview data. Use this for a messaging inbox or contact list screen.
+
+<Tip>
+  Use **`getUserContacts`** to populate your messaging screen — it returns only
+  users the current user is already chatting with, plus a last-message preview
+  for each conversation. Use **`getSearchUsers`** for a "find people" or
+  "add a friend" flow where you need to search across the full user base.
+</Tip>
+
+---
+
+## Spring Data Pageable Parameters
+
+Both endpoints accept standard Spring Data pagination parameters as query parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | `int` | `0` | Zero-based page index |
+| `size` | `int` | `20` | Number of items per page |
+| `sort` | `String` | — | Sort expression, e.g. `nombre,asc` or `nombre,desc`. Can be repeated for multi-field sorting. |
+
+---
+
+## Endpoints
+
+### Search Users
+
+<code>GET /api/users/app/getSearchUsers</code>
+
+Searches the entire user directory for users whose `nombre` (username) matches the provided filter, **excluding** the currently authenticated user from results.
+
+**Required role:** `ROLE_USER`
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `nombre` | `String` | ✅ | Name filter (partial match). Pass an empty string to list all users. |
+| `page` | `int` | ❌ | Page index (default `0`) |
+| `size` | `int` | ❌ | Page size (default `20`) |
+| `sort` | `String` | ❌ | Sort expression, e.g. `nombre,asc` |
+
+#### Response: `Page<UserReducedData>`
+
+```json
+{
+  "content": [
+    {
+      "idUsuario": 7,
+      "nombre": "alice",
+      "fotoPerfil": "https://cdn.example.com/avatars/signed-url..."
+    },
+    {
+      "idUsuario": 13,
+      "nombre": "alicia_88",
+      "fotoPerfil": "https://cdn.example.com/avatars/signed-url..."
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10
+  },
+  "totalElements": 2,
+  "totalPages": 1,
+  "last": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `idUsuario` | `Long` | Unique user identifier |
+| `nombre` | `String` | Username / display name |
+| `fotoPerfil` | `String` | Signed URL for the user's profile photo |
+
+#### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/users/app/getSearchUsers?nombre=alice&page=0&size=10" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```
+
+---
+
+### Get User Contacts
+
+<code>GET /api/users/app/getUserContacts</code>
+
+Returns a paginated list of users with whom the authenticated user has an existing chat, filtered by name. Each result is enriched with last-message preview data drawn from the most recent message in the shared conversation.
+
+**Required role:** `ROLE_USER`
+
+The authenticated user's identity is resolved from the JWT (`Authentication` object) — no explicit user ID parameter is needed.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `nombre` | `String` | ✅ | Name filter for contacts (partial match). Pass an empty string to return all contacts. |
+| `page` | `int` | ❌ | Page index (default `0`) |
+| `size` | `int` | ❌ | Page size (default `20`) |
+| `sort` | `String` | ❌ | Sort expression, e.g. `nombre,asc` |
+
+#### Response: `Page<UserChatDataDto>`
+
+```json
+{
+  "content": [
+    {
+      "idUsuario": 99,
+      "nombre": "bob",
+      "fotoPerfil": "https://cdn.example.com/avatars/signed-url...",
+      "idChat": 5,
+      "ultimoMensaje": "Hey, are you free tonight?",
+      "mensajeNuevo": true
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10
+  },
+  "totalElements": 1,
+  "totalPages": 1,
+  "last": true
+}
+```
+
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `idUsuario` | `Long` | `UserChatDataDto` | Unique user identifier of the contact |
+| `nombre` | `String` | `UserChatDataDto` | Username / display name of the contact |
+| `fotoPerfil` | `String` | `UserChatDataDto` | Signed URL for the contact's profile photo |
+| `idChat` | `Long` | `LastMessageDataModel` | ID of the shared chat conversation |
+| `ultimoMensaje` | `String` | `LastMessageDataModel` (`contenido`) | Text content of the most recent message in the chat |
+| `mensajeNuevo` | `Boolean` | `LastMessageDataModel` (`noRead`) | `true` if the last message has not been read by the authenticated user |
+
+#### Example
+
+```bash
+curl -X GET \
+  "https://api.example.com/api/users/app/getUserContacts?nombre=&page=0&size=10" \
+  -H "Authorization: Bearer <your_jwt_token>"
+```
+
+---
+
+## Search vs. Contacts at a Glance
+
+| | `getSearchUsers` | `getUserContacts` |
+|---|---|---|
+| **Scope** | All users in the system | Only users already in a chat with you |
+| **Excludes self** | ✅ Yes | ✅ Yes (implicit via auth) |
+| **Last message preview** | ❌ No | ✅ Yes |
+| **Unread indicator** | ❌ No | ✅ Yes (`mensajeNuevo`) |
+| **Typical use case** | User discovery / "Add people" | Messaging inbox / contact list |

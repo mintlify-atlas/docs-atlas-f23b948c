@@ -1,0 +1,48 @@
+---
+title: "User API Endpoints Reference"
+sidebarTitle: "Overview"
+description: "The CalenderyBack Users API manages registration, authentication, profile retrieval, and public-key operations across 18 REST endpoints."
+---
+
+The Users resource is the foundation of CalenderyBack. It covers the full user lifecycle: creating and verifying accounts, authenticating via HTTP Basic, fetching and updating profiles, managing account settings, searching contacts, and handling end-to-end encryption public keys. All app-level endpoints require an active `ROLE_USER` session, while several also enforce ownership via `@PreAuthorize`.
+
+## Endpoint Index
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/users/auth/register` | Public | Register a new user and trigger a verification email |
+| `GET` | `/api/users/registrationConfirm?token=` | Public | Confirm email address with the verification token |
+| `POST` | `/api/users/auth/login` | HTTP Basic | Exchange credentials for a `UserInfoResponseDto` session object |
+| `GET` | `/api/users/auth/validateUser?email=` | Public | Check whether a user account is enabled |
+| `GET` | `/api/users/auth/resendRegistrationToken?idUsuario=` | Public | Re-send the email verification token |
+| `GET` | `/api/users/{id}` | Authenticated | Fetch full `UserDto` by numeric ID |
+| `GET` | `/api/users/email/{email}` | Authenticated | Fetch full `UserDto` by email address |
+| `GET` | `/api/users` | Authenticated | List all users |
+| `PUT` | `/api/users` | Authenticated | Replace a user record |
+| `DELETE` | `/api/users/{id}` | Authenticated | Delete a user by ID |
+| `DELETE` | `/api/users/all` | Authenticated | Delete every user record |
+| `GET` | `/api/users/activeAccountConfirmation?idUsuario=` | `ROLE_USER` + owner | Verify the calling user's account is active |
+| `GET` | `/api/users/app/getUploadProfileSignedUrl` | `ROLE_USER` | Get a Supabase signed URL to upload a profile photo |
+| `GET` | `/api/users/app/getUserSettings?idUsuario=` | `ROLE_USER` + owner | Retrieve the account settings for the authenticated user |
+| `GET` | `/api/users/app/getUserProfile?idUsuario=` | `ROLE_USER` | Get a public profile with follower stats and chat status |
+| `PUT` | `/api/users/app/updateUserSetting?idUsuario=` | `ROLE_USER` + owner | Update account settings for the authenticated user |
+| `GET` | `/api/users/app/getUserCommentData` | `ROLE_USER` | Fetch the avatar and username used when posting comments |
+| `GET` | `/api/users/app/getUserContacts?nombre=` | `ROLE_USER` | Paginated list of chat contacts filtered by name |
+| `GET` | `/api/users/app/getSearchUsers?nombre=` | `ROLE_USER` | Paginated user search by name |
+| `GET` | `/api/users/app/getPublicKey?idUsuario=` | `ROLE_USER` | Retrieve another user's E2E encryption public key |
+| `GET` | `/api/users/app/checkPublicKey?idUsuario=&clavePublica=` | `ROLE_USER` + owner | Verify that a stored public key matches the provided value |
+| `PUT` | `/api/users/app/publicKey?userId=` | `ROLE_USER` + owner | Save or replace the caller's E2E encryption public key |
+
+## Explore by Topic
+
+<CardGroup cols={2}>
+  <Card title="Registration" icon="user-plus" href="/api/users/registration">
+    Register new users, confirm email tokens, log in, validate account status, and resend verification emails.
+  </Card>
+  <Card title="Profile" icon="circle-user" href="/api/users/profile">
+    Retrieve full user profiles with follow status, upload profile photos via Supabase signed URLs, and manage E2E encryption public keys.
+  </Card>
+  <Card title="Settings" icon="gear" href="/api/users/settings">
+    Fetch and update account settings, list all users, delete accounts, and search or page through chat contacts.
+  </Card>
+</CardGroup>

@@ -1,0 +1,296 @@
+---
+title: "Real-Time Messaging with STOMP WebSockets"
+sidebarTitle: "WebSockets"
+description: "CalenderyBack uses Spring WebSocket with STOMP and an in-memory broker to deliver private messages in real time. Learn the connection flow, destinations, and message format."
+---
+
+## Overview
+
+CalenderyBack provides real-time private messaging through **Spring WebSocket** with the **STOMP** (Simple Text Oriented Messaging Protocol) subprotocol. An in-memory message broker routes frames between connected clients. No SockJS fallback is configured — clients connect using a raw WebSocket.
+
+The feature spans two bounded contexts:
+- **`chat`** — manages conversation threads and owns `WebSocketConfig`.
+- **`message`** — owns individual messages, the `MessageController` (STOMP handler), and the REST endpoints for message history.
+
+---
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Transport | Raw WebSocket (no SockJS) |
+| Subprotocol | STOMP |
+| Message broker | Spring in-memory simple broker |
+| Private delivery | `SimpMessagingTemplate.convertAndSendToUser()` |
+| Broker destinations | `/topic` (broadcast), `/queue` (point-to-point) |
+| App destination prefix | `/app` |
+| User destination prefix | `/user` |
+
+---
+
+## WebSocket Configuration
+
+`WebSocketConfig` lives in `chat/infrastructure/configuration` and implements `WebSocketMessageBrokerConfigurer`:
+
+```java
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic", "/queue");  // in-memory broker prefixes
+        config.setApplicationDestinationPrefixes("/app"); // routes to @MessageMapping methods
+        config.setUserDestinationPrefix("/user");         // enables convertAndSendToUser()
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws-endpoint")
+                .setAllowedOrigins("*");
+    }
+}
+```
+
+<Note>
+`setAllowedOrigins("*")` is suitable for local development and testing. Before deploying to production, replace the wildcard with the exact origin(s) of your frontend application (e.g., `setAllowedOrigins("https://yourapp.example.com")`) to prevent unauthorised cross-origin WebSocket connections.
+</Note>
+
+### Broker and Prefix Explained
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `enableSimpleBroker` | `/topic`, `/queue` | The in-memory broker handles subscriptions whose destination starts with these prefixes |
+| `setApplicationDestinationPrefixes` | `/app` | STOMP frames sent to `/app/…` are routed to `@MessageMapping` handler methods |
+| `setUserDestinationPrefix` | `/user` | Enables per-user routing; `convertAndSendToUser(email, "/queue/mensajes", …)` delivers to `/user/{email}/queue/mensajes` |
+
+---
+
+## STOMP Endpoint
+
+Clients connect to:
+
+```
+ws://host:8080/ws-endpoint
+```
+
+The endpoint requires `ROLE_USER`. Credentials (email + password) must be passed as HTTP Basic auth headers during the WebSocket handshake — the HTTP upgrade request goes through the Spring Security filter chain before the WebSocket connection is established.
+
+<Warning>
+**WebSocket authentication must be handled at the HTTP handshake level.** After the connection upgrades to WebSocket, the STOMP `CONNECT` frame is also verified by `SocketSecurityConfig` (see [Security](/concepts/security)). If you use a JavaScript client, make sure your STOMP library sends the `Authorization` header during the handshake. Some libraries pass STOMP `login`/`passcode` headers instead — these are not automatically honoured by Spring's HTTP Basic filter; you may need a `ChannelInterceptor` to extract and process them.
+</Warning>
+
+---
+
+## Message Flow: Private Messaging
+
+### Sending a private message
+
+The client sends a STOMP frame to `/app/chat.sendPrivate`. The server's `MessageController` handles it, persists the message via the Mediator, and then delivers it directly to the recipient's private queue.
+
+```java
+@Controller
+@RequiredArgsConstructor
+public class MessageController implements MessageApi {
+
+    private final Mediator mediator;
+    private final MessageDtoMapper messageDtoMapper;
+
+    @Autowired
+    private SimpMessagingTemplate simpMessagingTemplate;
+
+    @MessageMapping("/chat.sendPrivate")
+    public void sendSpecific(@Payload MessageDto messageDto, Principal user) {
+        LocalDateTime date = LocalDateTime.now();
+        SaveMessageRequest request =
+            new SaveMessageRequest(messageDtoMapper.mapToMessage(messageDto), date);
+        SaveMessageResponse response = mediator.dispatch(request);
+        Message message = response.getMessage();
+
+        simpMessagingTemplate.convertAndSendToUser(
+            message.getToUser().getEmail(),   // recipient identified by email
+            "/queue/mensajes",                // destination suffix
+            messageDtoMapper.mapToMessageResponseChat(message, messageDto.getChatId())
+        );
+    }
+    …
+}
+```
+
+`convertAndSendToUser(email, "/queue/mensajes", payload)` internally resolves to the destination `/user/{email}/queue/mensajes`. Spring's user-destination resolver maps this to the correct session for the recipient.
+
+### Receiving a private message
+
+The recipient subscribes to:
+
+```
+/user/queue/mensajes
+```
+
+Spring Security and the in-memory broker ensure that only the authenticated user with the matching email receives messages on that destination.
+
+---
+
+## Message Flow: Broadcast Channel
+
+A second handler supports a broadcast / history channel:
+
+```java
+@MessageMapping("/secured/chat")
+@SendTo("/secured/history")
+public MessageDto sendMessage(MessageDto messageDto) {
+    LocalDateTime date = LocalDateTime.now();
+    SaveMessageRequest request =
+        new SaveMessageRequest(messageDtoMapper.mapToMessage(messageDto), date);
+    SaveMessageResponse response = mediator.dispatch(request);
+    return messageDtoMapper.mapToMessageDto(response.getMessage());
+}
+```
+
+| Direction | Destination |
+|---|---|
+| Client → server | `/app/secured/chat` |
+| Server → all subscribers | `/secured/history` |
+
+Every client subscribed to `/secured/history` receives the message.
+
+---
+
+## Message DTOs
+
+### `MessageDto` — inbound payload
+
+Sent by the client when creating a message:
+
+```java
+@Data
+public class MessageDto {
+    private Long id;
+
+    @NotBlank
+    private Long chatId;        // which conversation this message belongs to
+
+    @NotBlank
+    private Long fromUser;      // sender's user ID
+
+    @NotBlank
+    private Long toUser;        // recipient's user ID
+
+    private LocalDateTime timeStamp;
+
+    @NotBlank
+    private String content;     // the message body
+
+    @NotBlank
+    private String selfMessage; // client-side indicator (e.g. "true"/"false")
+
+    private EstadoMensaje messageState; // ENVIADO | ENTREGADO | LEIDO
+}
+```
+
+### `MessageResponseDto` — server response
+
+Delivered to the recipient's `/user/queue/mensajes` subscription:
+
+```java
+@Data
+@AllArgsConstructor
+public class MessageResponseDto {
+    private Long idMensaje;              // persisted message ID
+    private Long idChat;                 // conversation ID
+    private Long idUsuario;              // sender's user ID
+    private String contenido;            // message body
+    private LocalDateTime timeStamp;     // server-assigned timestamp
+    private EstadoMensaje estadoMensaje; // ENVIADO | ENTREGADO | LEIDO
+}
+```
+
+`EstadoMensaje` is an enum with three values:
+
+| Value | Meaning |
+|---|---|
+| `ENVIADO` | Message has been sent |
+| `ENTREGADO` | Message has been delivered to the recipient's queue |
+| `LEIDO` | Message has been read |
+
+---
+
+## JavaScript Client Example
+
+The following example uses the `@stomp/stompjs` library to connect, subscribe to private messages, and send a private message.
+
+```javascript
+import { Client } from '@stomp/stompjs';
+
+// Build the Basic auth header value
+const credentials = btoa('user@example.com:password');
+
+const client = new Client({
+  brokerURL: 'ws://localhost:8080/ws-endpoint',
+
+  // Pass HTTP Basic credentials during the WebSocket handshake
+  connectHeaders: {
+    Authorization: `Basic ${credentials}`,
+  },
+
+  onConnect: () => {
+    console.log('Connected to CalenderyBack WebSocket');
+
+    // Subscribe to incoming private messages
+    client.subscribe('/user/queue/mensajes', (frame) => {
+      const message = JSON.parse(frame.body);
+      console.log('New message:', message);
+      // message: { idMensaje, idChat, idUsuario, contenido, timeStamp, estadoMensaje }
+    });
+  },
+
+  onDisconnect: () => {
+    console.log('Disconnected');
+  },
+});
+
+client.activate();
+
+// Send a private message
+function sendPrivateMessage({ chatId, fromUser, toUser, content }) {
+  client.publish({
+    destination: '/app/chat.sendPrivate',
+    body: JSON.stringify({
+      chatId,
+      fromUser,
+      toUser,
+      content,
+      selfMessage: 'false',
+    }),
+  });
+}
+
+// Example usage
+sendPrivateMessage({
+  chatId: 42,
+  fromUser: 1,
+  toUser: 7,
+  content: 'Hello!',
+});
+```
+
+---
+
+## Subscription Summary
+
+| Who subscribes | Destination | Receives |
+|---|---|---|
+| Any authenticated user | `/user/queue/mensajes` | Private messages addressed to them |
+| Any authenticated client | `/secured/history` | All broadcast messages on the secured chat channel |
+
+---
+
+## WebSocket Security
+
+All STOMP destinations require authentication. The `SocketSecurityConfig` class (see [Security](/concepts/security)) enforces:
+
+- Sending to `/app/**` → authenticated
+- Subscribing to `/user/**` or `/topic/**` → authenticated
+- Any other message → authenticated
+
+There is no unauthenticated WebSocket access. Unauthenticated clients will have the HTTP upgrade rejected by the Spring Security filter chain before a WebSocket connection is even established.

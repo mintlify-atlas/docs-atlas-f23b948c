@@ -1,0 +1,180 @@
+---
+title: "Message REST Endpoints — History and Read Receipts"
+sidebarTitle: "Messages"
+description: "Fetch paginated message history for a chat, update message delivery and read states, mark all messages in a chat as read, and check for pending messages."
+---
+
+## Overview
+
+The message REST API covers everything that happens **after** a message has been sent via WebSocket: loading conversation history, advancing a message through its delivery lifecycle, and checking for any unread messages across all of a user's chats. All endpoints require **ROLE\_USER**.
+
+### EstadoMensaje — message state enum
+
+Messages move through three states from the moment they leave the sender's device to the moment they are read.
+
+| Value        | Meaning                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| `ENVIADO`    | The message has been sent and persisted in the database            |
+| `ENTREGADO`  | The message has been delivered to the recipient's device           |
+| `LEIDO`      | The recipient has opened and read the message                      |
+
+<Note>
+The normal state transition is **ENVIADO → ENTREGADO → LEIDO**. After a recipient connects (or reconnects) and their client receives the message over WebSocket or via the history REST endpoint, it should call `changeMessageToDeliveredState`. When the user actually opens the conversation, the client calls `changeMessageToReadedState` (or `changeAllChatMessagesToReadedState` to mark all messages at once).
+</Note>
+
+---
+
+## Endpoints
+
+### GET /api/messages/app/getChatMessages
+
+Returns a paginated page of messages for a given chat. The `usuarioActual` parameter is used server-side to compute the `contenido` field: if the requesting user is the **sender**, the stored `selfMessage` copy of the content is returned; otherwise the plain `content` field is returned.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter       | Type      | Required | Description                                                        |
+| --------------- | --------- | -------- | ------------------------------------------------------------------ |
+| `idChat`        | `Long`    | ✅        | The chat whose message history to fetch                            |
+| `usuarioActual` | `Long`    | ✅        | ID of the requesting user — used to resolve the `contenido` field  |
+| `page`          | `Integer` | ✅        | Zero-based page index (e.g. `0` for the most recent page)          |
+| `size`          | `Integer` | ✅        | Number of messages per page (e.g. `20`)                            |
+
+**Response `200 OK` — `Page<MessageResponseDto>`**
+
+| Field          | Type            | Description                                                                     |
+| -------------- | --------------- | ------------------------------------------------------------------------------- |
+| `idMensaje`    | `Long`          | Unique identifier of the message                                                |
+| `idChat`       | `Long`          | ID of the chat this message belongs to                                          |
+| `idUsuario`    | `Long`          | ID of the user who sent the message                                             |
+| `contenido`    | `String`        | Message text — `selfMessage` for the sender, `content` for the recipient       |
+| `timeStamp`    | `LocalDateTime` | When the message was persisted                                                  |
+| `estadoMensaje`| `EstadoMensaje` | Current delivery state: `ENVIADO`, `ENTREGADO`, or `LEIDO`                     |
+
+The response is wrapped in Spring Data's standard `Page` envelope containing `content`, `totalElements`, `totalPages`, `number`, `size`, and `last` fields.
+
+```bash
+curl -X GET "http://localhost:8080/api/messages/app/getChatMessages?idChat=42&usuarioActual=1&page=0&size=20" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+**Example response**
+
+```json
+{
+  "content": [
+    {
+      "idMensaje": 101,
+      "idChat": 42,
+      "idUsuario": 1,
+      "contenido": "Hello!",
+      "timeStamp": "2024-06-01T10:30:00",
+      "estadoMensaje": "LEIDO"
+    },
+    {
+      "idMensaje": 102,
+      "idChat": 42,
+      "idUsuario": 2,
+      "contenido": "Hey, how are you?",
+      "timeStamp": "2024-06-01T10:31:00",
+      "estadoMensaje": "ENTREGADO"
+    }
+  ],
+  "totalElements": 2,
+  "totalPages": 1,
+  "number": 0,
+  "size": 20,
+  "last": true
+}
+```
+
+---
+
+### PUT /api/messages/app/changeMessageToDeliveredState
+
+Advances a single message's state to `ENTREGADO` (delivered). Call this as soon as the recipient's client receives the message — either over the WebSocket queue or when loading history.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter   | Type   | Required | Description                          |
+| ----------- | ------ | -------- | ------------------------------------ |
+| `idMensaje` | `Long` | ✅        | ID of the message to mark as delivered |
+
+**Response:** `200 OK` (empty body)
+
+```bash
+curl -X PUT "http://localhost:8080/api/messages/app/changeMessageToDeliveredState?idMensaje=101" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+---
+
+### PUT /api/messages/app/changeMessageToReadedState
+
+Advances a single message's state to `LEIDO` (read). Call this when the user opens a specific message or its containing conversation.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter   | Type   | Required | Description                       |
+| ----------- | ------ | -------- | --------------------------------- |
+| `idMensaje` | `Long` | ✅        | ID of the message to mark as read |
+
+**Response:** `200 OK` (empty body)
+
+```bash
+curl -X PUT "http://localhost:8080/api/messages/app/changeMessageToReadedState?idMensaje=101" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+---
+
+### PUT /api/messages/app/changeAllChatMessagesToReadedState
+
+Marks **all messages** in a given chat that are addressed to `idUsuario` as `LEIDO` in a single operation. Use this instead of looping over individual messages when the user opens a conversation for the first time or returns to it after being away.
+
+**Authentication:** ROLE\_USER
+
+**Query parameters**
+
+| Parameter   | Type   | Required | Description                                                           |
+| ----------- | ------ | -------- | --------------------------------------------------------------------- |
+| `idUsuario` | `Long` | ✅        | ID of the user whose received messages should be marked as read       |
+| `idChat`    | `Long` | ✅        | ID of the chat in which to mark all messages read                     |
+
+**Response:** `200 OK` (empty body)
+
+```bash
+curl -X PUT "http://localhost:8080/api/messages/app/changeAllChatMessagesToReadedState?idUsuario=1&idChat=42" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+---
+
+### GET /api/messages/app/checkForPendingMessages
+
+Returns a boolean indicating whether the authenticated user has **any unread (`ENVIADO`) messages** waiting across all of their chats. The server resolves the user from the active `Authentication` principal (email). Useful for displaying a notification badge in the UI without fetching full message history.
+
+**Authentication:** ROLE\_USER
+
+**Response `200 OK` — `Boolean`**
+
+| Value   | Meaning                                                  |
+| ------- | -------------------------------------------------------- |
+| `true`  | At least one unread message is waiting for this user     |
+| `false` | No pending messages                                      |
+
+```bash
+curl -X GET "http://localhost:8080/api/messages/app/checkForPendingMessages" \
+  -H "Authorization: Basic $(echo -n 'user@example.com:password' | base64)"
+```
+
+**Example response**
+
+```json
+true
+```

@@ -1,0 +1,80 @@
+---
+title: "Publications API — Calendar Posts Reference"
+sidebarTitle: "Overview"
+description: "The Publications API lets users create calendar-linked posts, upload media to Supabase Storage, and retrieve home feeds and profile timelines. All endpoints require ROLE_USER."
+---
+
+## What is a Publication?
+
+A **Publication** is a calendar-linked post that connects a media file, a text message, and a specific calendar date. Each publication is tied to a single user and stored as a record in the database, while its associated media file lives in **Supabase Storage** — CalenderyBack never buffers media through the Java application server.
+
+Publications expose social counters (`likesAmount`, `commentaryAmount`) and a per-request `like` boolean that indicates whether the currently authenticated user has already liked the post. Dates are split into two concepts: `calendarDate` (the date the user assigns on their calendar) and `uploadDate` (the wall-clock timestamp when the record was created).
+
+---
+
+## Publication Domain Entity
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `Long` | Unique publication identifier |
+| `user` | `User` | Owner of the publication |
+| `publicationFileName` | `String` | Supabase Storage object key / signed URL for the media file |
+| `message` | `String` | Text caption attached to the post |
+| `commentaryAmount` | `int` | Total number of comments on this publication |
+| `likesAmount` | `int` | Total number of likes on this publication |
+| `publicationDate` | `PublicationDate` | Wrapper holding `calendarDate` (`LocalDate`) and `uploadDate` (`LocalDateTime`) |
+| `like` | `boolean` | `true` if the requesting user has liked this publication |
+
+---
+
+## Two-Step Post Creation Flow
+
+Creating a publication is a two-step process. The media file is uploaded **directly from the client to Supabase Storage** using a short-lived signed URL; the Java server only coordinates the handshake and stores the metadata.
+
+<Note>
+  Signed URLs keep media traffic off the Java application server entirely. The client receives a pre-authorised Supabase URL and uploads the file straight to object storage, which improves throughput and avoids unnecessary load on the API tier.
+</Note>
+
+<Steps>
+  <Step title="Request a signed upload URL">
+    Call `GET /api/publication/app/getPostUrl`. CalenderyBack creates a placeholder `Publication` row in the database and returns a `SignedUrlPostDto` containing:
+
+    - **`url`** — a short-lived Supabase Storage signed upload URL
+    - **`idPost`** — the ID of the newly created placeholder publication
+
+    Hold onto `idPost`; you will need it in step 3.
+  </Step>
+
+  <Step title="Upload the file directly to Supabase">
+    Use the `url` from the previous response to upload your media file with an HTTP `PUT` (or the method indicated by Supabase). This request goes directly to Supabase Storage — **do not route it through the CalenderyBack API**.
+  </Step>
+
+  <Step title="Attach metadata to the publication">
+    Call `PUT /api/publication/app/putPublicationData` with a `PostDataDto` body that references the placeholder publication created in step 1:
+
+    ```json
+    {
+      "idPost": 42,
+      "message": "Beautiful sunset hike 🌄",
+      "idUsuario": 7,
+      "calendarDate": "2024-08-15"
+    }
+    ```
+
+    CalenderyBack looks up the placeholder publication, attaches the message, owner, and calendar date, and marks the record as complete. The endpoint returns `200 OK` with an empty body.
+  </Step>
+</Steps>
+
+---
+
+## Endpoint Summary
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/publication/app/getPostUrl` | Generate a Supabase signed upload URL and a placeholder publication ID |
+| `PUT` | `/api/publication/app/putPublicationData` | Attach message, owner, and calendar date to a placeholder publication |
+| `GET` | `/api/publication/app/getHomePublications` | Paginated feed of publications from followed users |
+| `GET` | `/api/publication/app/getProfilePosts` | Paginated calendar posts for a specific user filtered by month and year |
+| `DELETE` | `/api/publication/app/deletePublication` | Delete a publication owned by the authenticated user |
+
+Full request/response details for every endpoint are documented in the [Feed page](/api/publications/feed).
